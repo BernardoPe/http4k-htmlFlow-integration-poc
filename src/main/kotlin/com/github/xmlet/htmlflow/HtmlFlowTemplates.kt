@@ -7,7 +7,6 @@ import org.http4k.template.Templates
 import org.http4k.template.ViewModel
 import org.slf4j.LoggerFactory
 import java.io.File
-import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
@@ -23,7 +22,6 @@ import java.util.jar.JarFile
  *
  * This implementation only supports classpath-based template discovery and does not
  * support caching or hot reloading.
- *
  *
  */
 class HtmlFlowTemplates : Templates {
@@ -248,9 +246,9 @@ class HtmlFlowTemplates : Templates {
         try {
             val clazz = Class.forName(className)
             scanClassForHtmlViews(clazz, viewRegistry)
-        } catch (e: ClassNotFoundException) {
+        } catch (_: ClassNotFoundException) {
             logger.debug("Class not found: $className")
-        } catch (e: NoClassDefFoundError) {
+        } catch (_: NoClassDefFoundError) {
             logger.debug("Dependencies missing for class: $className")
         } catch (e: Exception) {
             logger.debug("Failed to load class: $className", e)
@@ -294,7 +292,7 @@ class HtmlFlowTemplates : Templates {
     private fun tryKotlinObjectInstance(clazz: Class<*>): Any? {
         return try {
             clazz.getDeclaredField("INSTANCE").get(null)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -302,7 +300,7 @@ class HtmlFlowTemplates : Templates {
     private fun trySingletonInstance(clazz: Class<*>): Any? {
         return try {
             clazz.getDeclaredMethod("getInstance").invoke(null)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -310,7 +308,7 @@ class HtmlFlowTemplates : Templates {
     private fun tryDefaultConstructor(clazz: Class<*>): Any? {
         return try {
             clazz.getDeclaredConstructor().newInstance()
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -340,13 +338,6 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Determines if a field is a relevant HTML view field.
-     */
-    private fun isRelevantViewField(field: Field): Boolean {
-        return !field.isSynthetic && (isHtmlViewField(field) || isHtmlViewAsyncField(field))
-    }
-
-    /**
      * Determines if a method is a relevant HTML view method.
      */
     private fun isRelevantViewMethod(method: Method): Boolean {
@@ -355,32 +346,11 @@ class HtmlFlowTemplates : Templates {
                 (isHtmlViewMethod(method) || isHtmlViewAsyncMethod(method))
     }
 
-    // Type checking methods
-    private fun isHtmlViewField(field: Field): Boolean =
-        HtmlView::class.java.isAssignableFrom(field.type)
-
-    private fun isHtmlViewAsyncField(field: Field): Boolean =
-        HtmlViewAsync::class.java.isAssignableFrom(field.type)
-
     private fun isHtmlViewMethod(method: Method): Boolean =
         HtmlView::class.java.isAssignableFrom(method.returnType)
 
     private fun isHtmlViewAsyncMethod(method: Method): Boolean =
         HtmlViewAsync::class.java.isAssignableFrom(method.returnType)
-
-    /**
-     * Processes a field that contains an HTML view.
-     */
-    private fun processViewField(
-        field: Field,
-        objectInstance: Any?,
-        viewRegistry: MutableMap<Class<*>, ViewInfo>
-    ) {
-        field.isAccessible = true
-        val view = field.get(objectInstance) ?: return
-        val location = "${field.declaringClass.name}.${field.name}"
-        registerView(view, field.genericType, viewRegistry, location)
-    }
 
     /**
      * Processes a method that returns an HTML view.
