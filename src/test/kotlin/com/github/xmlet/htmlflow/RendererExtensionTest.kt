@@ -1,0 +1,556 @@
+package com.github.xmlet.htmlflow
+
+import htmlflow.HtmlFlow
+import htmlflow.HtmlView
+import htmlflow.HtmlViewAsync
+import htmlflow.dyn
+import htmlflow.html
+import org.http4k.template.TemplateRenderer
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Nested
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import org.xmlet.htmlapifaster.body
+import org.xmlet.htmlapifaster.div
+import org.xmlet.htmlapifaster.h1
+import org.xmlet.htmlapifaster.h2
+import org.xmlet.htmlapifaster.head
+import org.xmlet.htmlapifaster.li
+import org.xmlet.htmlapifaster.p
+import org.xmlet.htmlapifaster.title
+import org.xmlet.htmlapifaster.ul
+import kotlin.test.assertNotNull
+
+/**
+ * Test suite for HtmlFlow extension functions
+ */
+class RendererExtensionTest {
+    @Nested
+    inner class HtmlViewExtensionTests {
+        @Test
+        fun `should create renderer from HtmlView`() {
+            val view: HtmlView<SimpleTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        body {
+                            div {
+                                attrClass("test-view")
+                                h1 { text("Test View") }
+                                dyn { model: SimpleTestViewModel ->
+                                    p { text("Content: ${model.content}") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.renderer()
+            assertNotNull(renderer)
+
+            val model = SimpleTestViewModel("Hello World")
+            val result = renderer(model)
+
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("Test View"))
+            assertTrue(result.contains("Content: Hello World"))
+            assertTrue(result.contains("</html>"))
+        }
+
+        @Test
+        fun `should handle complex HTML structure in renderer`() {
+            val view: HtmlView<ComplexTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        head {
+                            title { text("Complex Test") }
+                        }
+                        body {
+                            div {
+                                attrClass("container")
+                                dyn { model: ComplexTestViewModel ->
+                                    h1 { text(model.title) }
+                                    if (model.isActive) {
+                                        div {
+                                            attrClass("status active")
+                                            text("Status: Active")
+                                        }
+                                    } else {
+                                        div {
+                                            attrClass("status inactive")
+                                            text("Status: Inactive")
+                                        }
+                                    }
+                                    ul {
+                                        attrClass("items")
+                                        model.items.forEach { item ->
+                                            li {
+                                                attrClass("item")
+                                                text(item)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.renderer()
+            val model =
+                ComplexTestViewModel(
+                    title = "My Complex View",
+                    items = listOf("First Item", "Second Item", "Third Item"),
+                    isActive = true,
+                )
+
+            val result = renderer(model)
+
+            assertTrue(result.contains("Complex Test"))
+            assertTrue(result.contains("My Complex View"))
+            assertTrue(result.contains("Status: Active"))
+            assertTrue(result.contains("First Item"))
+            assertTrue(result.contains("Second Item"))
+            assertTrue(result.contains("Third Item"))
+            assertTrue(result.contains("class=\"container\""))
+            assertTrue(result.contains("class=\"items\""))
+        }
+
+        @Test
+        fun `should handle inactive status in complex view`() {
+            val view: HtmlView<ComplexTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        body {
+                            dyn { model: ComplexTestViewModel ->
+                                if (model.isActive) {
+                                    div { text("Active Content") }
+                                } else {
+                                    div { text("Inactive Content") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.renderer()
+            val model = ComplexTestViewModel("Title", emptyList(), false)
+            val result = renderer(model)
+
+            assertTrue(result.contains("Inactive Content"))
+            assertFalse(result.contains("Active Content"))
+        }
+
+        @Test
+        fun `should throw exception for type mismatch in HtmlView renderer`() {
+            val view: HtmlView<SimpleTestViewModel> =
+                HtmlFlow.view {
+                    it.html { body { } }
+                }
+
+            val renderer = view.renderer()
+            val wrongModel = ComplexTestViewModel("title", emptyList(), false)
+
+            val exception =
+                assertThrows<IllegalArgumentException> {
+                    renderer(wrongModel)
+                }
+
+            assertTrue(exception.message!!.contains("ViewModel type mismatch"))
+            assertTrue(exception.message!!.contains("Expected: SimpleTestViewModel"))
+            assertTrue(exception.message!!.contains("Got: ComplexTestViewModel"))
+        }
+
+        @Test
+        fun `should handle empty content gracefully`() {
+            val view: HtmlView<SimpleTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        body {
+                            dyn { model: SimpleTestViewModel ->
+                                if (model.content.isNotEmpty()) {
+                                    p { text(model.content) }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.renderer()
+            val model = SimpleTestViewModel("")
+            val result = renderer(model)
+
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("<body>"))
+            assertTrue(result.contains("</body>"))
+            assertTrue(result.contains("</html>"))
+            assertFalse(result.contains("<p>"))
+        }
+    }
+
+    @Nested
+    inner class HtmlViewAsyncExtensionTests {
+        @Test
+        fun `should create renderer from HtmlViewAsync`() {
+            val view: HtmlViewAsync<AsyncTestViewModel> =
+                HtmlFlow.viewAsync {
+                    it.html {
+                        body {
+                            div {
+                                attrClass("async-test")
+                                h2 { text("Async Test View") }
+                                dyn { model: AsyncTestViewModel ->
+                                    p { text("Async content: ${model.content}") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer: TemplateRenderer = view.renderer()
+            assertNotNull(renderer)
+
+            val model = AsyncTestViewModel("Async Hello")
+            val result = renderer(model)
+
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("Async Test View"))
+            assertTrue(result.contains("Async content: Async Hello"))
+            assertTrue(result.contains("</html>"))
+        }
+
+        @Test
+        fun `should handle complex async rendering`() {
+            val view: HtmlViewAsync<ComplexTestViewModel> =
+                HtmlFlow.viewAsync {
+                    it.html {
+                        head {
+                            title { text("Async Complex") }
+                        }
+                        body {
+                            div {
+                                attrClass("async-complex")
+                                dyn { model: ComplexTestViewModel ->
+                                    h1 { text("Async: ${model.title}") }
+                                    div {
+                                        attrClass("async-status")
+                                        text(
+                                            "Async Status: ${if (model.isActive) "Active" else "Inactive"}",
+                                        )
+                                    }
+                                    if (model.items.isNotEmpty()) {
+                                        ul {
+                                            model.items.forEachIndexed { index, item ->
+                                                li {
+                                                    attrClass("async-item")
+                                                    text("${index + 1}. $item")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.renderer()
+            val model =
+                ComplexTestViewModel(
+                    title = "Async Complex Title",
+                    items = listOf("Async Item 1", "Async Item 2"),
+                    isActive = true,
+                )
+
+            val result = renderer(model)
+
+            assertTrue(result.contains("Async Complex"))
+            assertTrue(result.contains("Async: Async Complex Title"))
+            assertTrue(result.contains("Async Status: Active"))
+            assertTrue(result.contains("1. Async Item 1"))
+            assertTrue(result.contains("2. Async Item 2"))
+        }
+
+        @Test
+        fun `should throw exception for type mismatch in HtmlViewAsync renderer`() {
+            val view: HtmlViewAsync<AsyncTestViewModel> =
+                HtmlFlow.viewAsync {
+                    it.html { body { } }
+                }
+
+            val renderer = view.renderer()
+            val wrongModel = SimpleTestViewModel("wrong type")
+
+            val exception =
+                assertThrows<IllegalArgumentException> {
+                    renderer(wrongModel)
+                }
+
+            assertTrue(exception.message!!.contains("ViewModel type mismatch for async view"))
+            assertTrue(exception.message!!.contains("Expected: AsyncTestViewModel"))
+            assertTrue(exception.message!!.contains("Got: SimpleTestViewModel"))
+        }
+    }
+
+    @Nested
+    inner class HtmlViewExtensionTestsTyped {
+        @Test
+        fun `should create renderer from HtmlView`() {
+            val view: HtmlView<SimpleTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        body {
+                            div {
+                                attrClass("test-view")
+                                h1 { text("Test View") }
+                                dyn { model: SimpleTestViewModel ->
+                                    p { text("Content: ${model.content}") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.rendererTyped()
+            assertNotNull(renderer)
+
+            val model = SimpleTestViewModel("Hello World")
+            val result = renderer(model)
+
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("Test View"))
+            assertTrue(result.contains("Content: Hello World"))
+            assertTrue(result.contains("</html>"))
+        }
+
+        @Test
+        fun `should handle complex HTML structure in renderer`() {
+            val view: HtmlView<ComplexTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        head {
+                            title { text("Complex Test") }
+                        }
+                        body {
+                            div {
+                                attrClass("container")
+                                dyn { model: ComplexTestViewModel ->
+                                    h1 { text(model.title) }
+                                    if (model.isActive) {
+                                        div {
+                                            attrClass("status active")
+                                            text("Status: Active")
+                                        }
+                                    } else {
+                                        div {
+                                            attrClass("status inactive")
+                                            text("Status: Inactive")
+                                        }
+                                    }
+                                    ul {
+                                        attrClass("items")
+                                        model.items.forEach { item ->
+                                            li {
+                                                attrClass("item")
+                                                text(item)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.rendererTyped()
+            val model =
+                ComplexTestViewModel(
+                    title = "My Complex View",
+                    items = listOf("First Item", "Second Item", "Third Item"),
+                    isActive = true,
+                )
+
+            val result = renderer(model)
+
+            assertTrue(result.contains("Complex Test"))
+            assertTrue(result.contains("My Complex View"))
+            assertTrue(result.contains("Status: Active"))
+            assertTrue(result.contains("First Item"))
+            assertTrue(result.contains("Second Item"))
+            assertTrue(result.contains("Third Item"))
+            assertTrue(result.contains("class=\"container\""))
+            assertTrue(result.contains("class=\"items\""))
+        }
+
+        @Test
+        fun `should handle inactive status in complex view`() {
+            val view: HtmlView<ComplexTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        body {
+                            dyn { model: ComplexTestViewModel ->
+                                if (model.isActive) {
+                                    div { text("Active Content") }
+                                } else {
+                                    div { text("Inactive Content") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.rendererTyped()
+            val model = ComplexTestViewModel("Title", emptyList(), false)
+            val result = renderer(model)
+
+            assertTrue(result.contains("Inactive Content"))
+            assertFalse(result.contains("Active Content"))
+        }
+
+//        @Test
+//        fun `should throw exception for type mismatch in HtmlView renderer`() {
+//            val view: HtmlView<SimpleTestViewModel> = HtmlFlow.view {
+//                it.html { body { } }
+//            }
+//
+//            val renderer = view.rendererTyped()
+//            val wrongModel = ComplexTestViewModel("title", emptyList(), false)
+//
+//            val exception = assertThrows<IllegalArgumentException> {
+//                renderer(wrongModel)
+//            }
+//
+//            assertTrue(exception.message!!.contains("ViewModel type mismatch"))
+//            assertTrue(exception.message!!.contains("Expected: SimpleTestViewModel"))
+//            assertTrue(exception.message!!.contains("Got: ComplexTestViewModel"))
+//        }
+
+        @Test
+        fun `should handle empty content gracefully`() {
+            val view: HtmlView<SimpleTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        body {
+                            dyn { model: SimpleTestViewModel ->
+                                if (model.content.isNotEmpty()) {
+                                    p { text(model.content) }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.rendererTyped()
+            val model = SimpleTestViewModel("")
+            val result = renderer(model)
+
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("<body>"))
+            assertTrue(result.contains("</body>"))
+            assertTrue(result.contains("</html>"))
+            assertFalse(result.contains("<p>"))
+        }
+    }
+
+    @Nested
+    inner class HtmlViewAsyncExtensionTestsTyped {
+        @Test
+        fun `should create renderer from HtmlViewAsync`() {
+            val view: HtmlViewAsync<AsyncTestViewModel> =
+                HtmlFlow.viewAsync {
+                    it.html {
+                        body {
+                            div {
+                                attrClass("async-test")
+                                h2 { text("Async Test View") }
+                                dyn { model: AsyncTestViewModel ->
+                                    p { text("Async content: ${model.content}") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.rendererTyped()
+            assertNotNull(renderer)
+
+            val model = AsyncTestViewModel("Async Hello")
+            val result = renderer(model)
+
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("Async Test View"))
+            assertTrue(result.contains("Async content: Async Hello"))
+            assertTrue(result.contains("</html>"))
+        }
+
+        @Test
+        fun `should handle complex async rendering`() {
+            val view: HtmlViewAsync<ComplexTestViewModel> =
+                HtmlFlow.viewAsync {
+                    it.html {
+                        head {
+                            title { text("Async Complex") }
+                        }
+                        body {
+                            div {
+                                attrClass("async-complex")
+                                dyn { model: ComplexTestViewModel ->
+                                    h1 { text("Async: ${model.title}") }
+                                    div {
+                                        attrClass("async-status")
+                                        text(
+                                            "Async Status: ${if (model.isActive) "Active" else "Inactive"}",
+                                        )
+                                    }
+                                    if (model.items.isNotEmpty()) {
+                                        ul {
+                                            model.items.forEachIndexed { index, item ->
+                                                li {
+                                                    attrClass("async-item")
+                                                    text("${index + 1}. $item")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.rendererTyped()
+            val model =
+                ComplexTestViewModel(
+                    title = "Async Complex Title",
+                    items = listOf("Async Item 1", "Async Item 2"),
+                    isActive = true,
+                )
+
+            val result = renderer(model)
+
+            assertTrue(result.contains("Async Complex"))
+            assertTrue(result.contains("Async: Async Complex Title"))
+            assertTrue(result.contains("Async Status: Active"))
+            assertTrue(result.contains("1. Async Item 1"))
+            assertTrue(result.contains("2. Async Item 2"))
+        }
+
+//        @Test
+//        fun `should throw exception for type mismatch in HtmlViewAsync renderer`() {
+//            val view: HtmlViewAsync<AsyncTestViewModel> = HtmlFlow.viewAsync {
+//                it.html { body { } }
+//            }
+//
+//            val renderer = view.rendererTyped()
+//            val wrongModel = SimpleTestViewModel("wrong type")
+//
+//            val exception = assertThrows<IllegalArgumentException> {
+//                renderer(wrongModel)
+//            }
+//
+//            assertTrue(exception.message!!.contains("ViewModel type mismatch for async view"))
+//            assertTrue(exception.message!!.contains("Expected: AsyncTestViewModel"))
+//            assertTrue(exception.message!!.contains("Got: SimpleTestViewModel"))
+//        }
+    }
+}

@@ -1,0 +1,463 @@
+package com.github.xmlet.htmlflow
+
+import com.github.xmlet.htmlflow.testviews.objects.ClassTestViews
+import com.github.xmlet.htmlflow.testviews.simple.SimpleTestViews
+import htmlflow.HtmlFlow
+import htmlflow.HtmlView
+import htmlflow.HtmlViewAsync
+import htmlflow.dyn
+import htmlflow.html
+import org.http4k.template.ViewModel
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Nested
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.TestInstance
+import org.junit.jupiter.api.assertThrows
+import org.xmlet.htmlapifaster.body
+import org.xmlet.htmlapifaster.div
+import org.xmlet.htmlapifaster.p
+import java.lang.reflect.Field
+import java.lang.reflect.Method
+import kotlin.jvm.java
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+
+/**
+ * Comprehensive test suite for HtmlFlowTemplates class
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class HtmlFlowTemplatesTest {
+    private lateinit var htmlFlowTemplates: HtmlFlowTemplates
+
+    @BeforeEach
+    fun setUp() {
+        htmlFlowTemplates = HtmlFlowTemplates()
+    }
+
+    @Nested
+    inner class ViewFindingTests {
+        @Test
+        fun `should find views in simple package`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.simple",
+                )
+
+            val simpleModel = SimpleTestViewModel("test content")
+            val result = renderer(simpleModel)
+
+            assertTrue(result.contains("Simple View") || result.contains("Method View"))
+            assertTrue(result.contains("test content"))
+        }
+
+        @Test
+        fun `should find views in objects package`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.objects",
+                )
+
+            val complexModel = ComplexTestViewModel("Test Title", listOf("item1", "item2"), true)
+            val result = renderer(complexModel)
+
+            assertTrue(result.contains("Complex View") || result.contains("Object Complex View"))
+            assertTrue(result.contains("Test Title"))
+        }
+
+        @Test
+        fun `should handle empty package gracefully`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.empty",
+                )
+
+            val model = SimpleTestViewModel("test")
+            val exception =
+                assertThrows<IllegalArgumentException> {
+                    renderer(model)
+                }
+
+            assertTrue(exception.message!!.contains("No compatible HtmlView found"))
+        }
+
+        @Test
+        fun `should find views across multiple packages`() {
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews")
+
+            val simpleModel = SimpleTestViewModel("test content")
+            val result = renderer(simpleModel)
+
+            assertNotNull(result)
+            assertTrue(result.contains("test content"))
+        }
+
+        @Test
+        fun `should cache view registry across multiple calls`() {
+            val renderer1 =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.simple",
+                )
+            val renderer2 =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.simple",
+                )
+
+            val model = SimpleTestViewModel("test")
+            val result1 = renderer1(model)
+            val result2 = renderer2(model)
+
+            assertEquals(result1, result2)
+        }
+    }
+
+    @Nested
+    inner class ViewRenderingTests {
+        @Test
+        fun `should render HtmlView correctly`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.simple",
+                )
+
+            val model = SimpleTestViewModel("Hello World")
+            val result = renderer(model)
+
+            assertTrue(result.contains("Hello World"))
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("</html>"))
+        }
+
+        @Test
+        fun `should render HtmlViewAsync correctly`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.simple",
+                )
+
+            val model = AsyncTestViewModel("Async Hello")
+            val result = renderer(model)
+
+            assertTrue(result.contains("Async Hello"))
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("</html>"))
+        }
+
+        @Test
+        fun `should render complex view with lists and conditionals`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.objects",
+                )
+
+            val model = ComplexTestViewModel("My Title", listOf("First", "Second", "Third"), true)
+            val result = renderer(model)
+
+            assertTrue(result.contains("My Title"))
+            assertTrue(result.contains("First"))
+            assertTrue(result.contains("Second"))
+            assertTrue(result.contains("Third"))
+            assertTrue(result.contains("Active"))
+        }
+
+        @Test
+        fun `should handle inactive status in complex view`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.objects",
+                )
+
+            val model = ComplexTestViewModel("Inactive Title", listOf("Item"), false)
+            val result = renderer(model)
+
+            assertTrue(result.contains("Inactive Title"))
+            assertTrue(result.contains("Item"))
+            assertFalse(result.contains("Active"))
+        }
+
+        @Test
+        fun `should throw exception for unknown view type`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.simple",
+                )
+
+            val unknownModel = object : ViewModel {}
+
+            val exception =
+                assertThrows<IllegalArgumentException> {
+                    renderer(unknownModel)
+                }
+
+            assertTrue(exception.message!!.contains("No compatible HtmlView found"))
+        }
+    }
+
+    @Nested
+    inner class InheritanceTests {
+        @Test
+        fun `should find view for base class when using inherited model`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.inheritance",
+                )
+
+            val inheritedModel = InheritedTestViewModel("base content", "derived content")
+            val result = renderer(inheritedModel)
+
+            assertTrue(result.contains("base content"))
+        }
+
+        @Test
+        fun `should find view for interface when using implementing model`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.inheritance",
+                )
+
+            val interfaceModel = InterfaceTestViewModel("interface content", "additional content")
+            val result = renderer(interfaceModel)
+
+            assertTrue(result.contains("interface content"))
+        }
+
+        @Test
+        fun `should handle direct base class model`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.inheritance",
+                )
+
+            val baseModel = BaseTestViewModel("direct base content")
+            val result = renderer(baseModel)
+
+            assertTrue(result.contains("direct base content"))
+        }
+    }
+
+    @Nested
+    inner class DuplicateViewTests {
+        @Test
+        fun `should throw exception when duplicate views are found`() {
+            val exception =
+                assertThrows<IllegalStateException> {
+                    htmlFlowTemplates.CachingClasspath(
+                        "com.github.xmlet.htmlflow.testviewsfailing.duplicate",
+                    )
+                }
+
+            assertTrue(exception.message!!.contains("Multiple views found"))
+            assertTrue(exception.message!!.contains("SimpleTestViewModel"))
+        }
+    }
+
+    @Nested
+    inner class TypeCheckingTests {
+        @Test
+        fun `should correctly identify HtmlView fields`() {
+            val field = createMockField(HtmlView::class.java)
+            val result = callPrivateMethod("isHtmlViewField", field)
+            assertTrue(result as Boolean)
+        }
+
+        @Test
+        fun `should correctly identify HtmlViewAsync fields`() {
+            val field = createMockField(HtmlViewAsync::class.java)
+            val result = callPrivateMethod("isHtmlViewAsyncField", field)
+            assertTrue(result as Boolean)
+        }
+
+        @Test
+        fun `should correctly identify HtmlView methods`() {
+            val method = createMockMethod(HtmlView::class.java)
+            val result = callPrivateMethod("isHtmlViewMethod", method)
+            assertTrue(result as Boolean)
+        }
+
+        @Test
+        fun `should correctly identify HtmlViewAsync methods`() {
+            val method = createMockMethod(HtmlViewAsync::class.java)
+            val result = callPrivateMethod("isHtmlViewAsyncMethod", method)
+            assertTrue(result as Boolean)
+        }
+
+        @Test
+        fun `should reject non-view fields`() {
+            val field = createMockField(String::class.java)
+            val result = callPrivateMethod("isHtmlViewField", field)
+            assertFalse(result as Boolean)
+        }
+
+        @Test
+        fun `should reject non-view methods`() {
+            val method = createMockMethod(String::class.java)
+            val result = callPrivateMethod("isHtmlViewMethod", method)
+            assertFalse(result as Boolean)
+        }
+
+        private fun createMockField(type: Class<*>): Field {
+            val field = org.mockito.Mockito.mock(Field::class.java)
+            org.mockito.Mockito.`when`(field.type).thenReturn(type)
+            return field
+        }
+
+        private fun createMockMethod(returnType: Class<*>): Method {
+            val method = org.mockito.Mockito.mock(Method::class.java)
+            org.mockito.Mockito.`when`(method.returnType).thenReturn(returnType)
+            return method
+        }
+    }
+
+    @Nested
+    inner class ObjectInstanceTests {
+        @Test
+        fun `should successfully create Kotlin object instance`() {
+            val result = callPrivateMethod("tryKotlinObjectInstance", SimpleTestViews::class.java)
+            assertNotNull(result)
+        }
+
+        @Test
+        fun `should return null for non-object class`() {
+            val result = callPrivateMethod("tryKotlinObjectInstance", ClassTestViews::class.java)
+            assertNull(result)
+        }
+
+        @Test
+        fun `should create default constructor instance`() {
+            val result = callPrivateMethod("tryDefaultConstructor", ClassTestViews::class.java)
+            assertNotNull(result)
+        }
+    }
+
+    @Nested
+    inner class ViewTypeExtractionTests {
+        @Test
+        fun `should handle non-parameterized types gracefully`() {
+            val result = callPrivateMethod("extractFromClassType", String::class.java)
+            assertNull(result)
+        }
+    }
+
+    @Nested
+    inner class IntegrationTests {
+        @Test
+        fun `should work with extension functions`() {
+            val view: HtmlView<SimpleTestViewModel> =
+                HtmlFlow.view {
+                    it.html {
+                        body {
+                            div {
+                                attrClass("extension-test")
+                                dyn { model: SimpleTestViewModel ->
+                                    p { text("Extension: ${model.content}") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.renderer()
+            val model = SimpleTestViewModel("extension test")
+            val result = renderer(model)
+
+            assertTrue(result.contains("Extension: extension test"))
+        }
+
+        @Test
+        fun `should work with async extension functions`() {
+            val view: HtmlViewAsync<AsyncTestViewModel> =
+                HtmlFlow.viewAsync {
+                    it.html {
+                        body {
+                            div {
+                                attrClass("async-extension-test")
+                                dyn { model: AsyncTestViewModel ->
+                                    p { text("Async Extension: ${model.content}") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            val renderer = view.renderer()
+            val model = AsyncTestViewModel("async extension test")
+            val result = renderer(model)
+
+            assertTrue(result.contains("Async Extension: async extension test"))
+        }
+
+        @Test
+        fun `should handle type mismatch in extension function`() {
+            val view: HtmlView<SimpleTestViewModel> =
+                HtmlFlow.view {
+                    it.html { body { } }
+                }
+
+            val renderer = view.renderer()
+            val wrongModel = AsyncTestViewModel("wrong type")
+
+            val exception =
+                assertThrows<IllegalArgumentException> {
+                    renderer(wrongModel)
+                }
+
+            assertTrue(exception.message!!.contains("ViewModel type mismatch"))
+        }
+    }
+
+    @Nested
+    inner class TemplatesInterfaceTests {
+        @Test
+        fun `should throw UnsupportedOperationException for Caching with directory`() {
+            val exception =
+                assertThrows<UnsupportedOperationException> {
+                    htmlFlowTemplates.Caching("some/template/dir")
+                }
+
+            assertTrue(exception.message!!.contains("Template directory caching is not supported"))
+            assertTrue(exception.message!!.contains("Use CachingClasspath() instead"))
+        }
+
+        @Test
+        fun `should throw UnsupportedOperationException for HotReload`() {
+            val exception =
+                assertThrows<UnsupportedOperationException> {
+                    htmlFlowTemplates.HotReload("some/template/dir")
+                }
+
+            assertTrue(
+                exception.message!!.contains(
+                    "Hot reload from template directories is not supported",
+                ),
+            )
+            assertTrue(exception.message!!.contains("Use CachingClasspath() instead"))
+        }
+
+        @Test
+        fun `should return working TemplateRenderer from CachingClasspath`() {
+            val renderer =
+                htmlFlowTemplates.CachingClasspath(
+                    "com.github.xmlet.htmlflow.testviews.simple",
+                )
+            assertNotNull(renderer)
+        }
+    }
+
+    /**
+     * Helper method to call private methods using reflection
+     */
+    private fun callPrivateMethod(
+        methodName: String,
+        vararg args: Any?,
+    ): Any? {
+        val method =
+            htmlFlowTemplates::class.java.getDeclaredMethod(
+                methodName,
+                *args.map { it?.javaClass ?: Object::class.java }.toTypedArray(),
+            )
+        method.isAccessible = true
+        return method.invoke(htmlFlowTemplates, *args)
+    }
+}

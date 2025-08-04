@@ -15,6 +15,7 @@ dependencies {
     implementation("org.http4k:http4k-template-core:6.15.1.0")
 
     implementation("org.slf4j:slf4j-api:2.0.13")
+    implementation("org.slf4j:slf4j-simple:2.0.13")
 
     implementation("com.github.xmlet:htmlflow:4.7")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
@@ -24,7 +25,6 @@ dependencies {
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.0")
     testImplementation("org.mockito:mockito-core:5.11.0")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
-
 }
 
 tasks.test {
