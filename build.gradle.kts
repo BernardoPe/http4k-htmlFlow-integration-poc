@@ -7,6 +7,7 @@ version = "1.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
+    mavenLocal()
 }
 
 dependencies {
@@ -17,7 +18,7 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.13")
     implementation("org.slf4j:slf4j-simple:2.0.13")
 
-    implementation("com.github.xmlet:htmlflow:4.7")
+    implementation("com.github.xmlet:htmlflow:4.8-SNAPSHOT")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
 
     testImplementation(kotlin("test"))
