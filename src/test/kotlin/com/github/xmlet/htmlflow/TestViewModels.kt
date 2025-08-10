@@ -24,8 +24,6 @@ data class ComplexTestViewModel(
     val isActive: Boolean,
 ) : ViewModel
 
-data class ParameterizedTestViewModel<T>(val data: T) : ViewModel
-
 open class BaseTestViewModel(open val baseContent: String) : ViewModel
 
 data class InheritedTestViewModel(
@@ -42,4 +40,8 @@ data class InterfaceTestViewModel(
     val additionalContent: String,
 ) : TestViewModelInterface, ViewModel
 
-object EmptyTestViewModel : ViewModel
+data class BuilderTestViewModel(val content: String) : ViewModel
+
+data class BuilderTestViewModel2(val content: String) : ViewModel
+
+data class BuilderTestViewModel3(val content: String) : ViewModel
