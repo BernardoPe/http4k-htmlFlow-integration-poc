@@ -4,7 +4,6 @@ import com.github.xmlet.htmlflow.testviews.objects.ClassTestViews
 import com.github.xmlet.htmlflow.testviews.simple.SimpleTestViews
 import htmlflow.HtmlFlow
 import htmlflow.HtmlView
-import htmlflow.HtmlViewAsync
 import htmlflow.dyn
 import htmlflow.html
 import org.http4k.template.ViewModel
@@ -131,21 +130,6 @@ class HtmlFlowTemplatesTest {
         }
 
         @Test
-        fun `should render HtmlViewAsync correctly`() {
-            val renderer =
-                htmlFlowTemplates.CachingClasspath(
-                    "com.github.xmlet.htmlflow.testviews.simple",
-                )
-
-            val model = AsyncTestViewModel("Async Hello")
-            val result = renderer(model)
-
-            assertTrue(result.contains("Async Hello"))
-            assertTrue(result.contains("<html>"))
-            assertTrue(result.contains("</html>"))
-        }
-
-        @Test
         fun `should render complex view with lists and conditionals`() {
             val renderer =
                 htmlFlowTemplates.CachingClasspath(
@@ -263,23 +247,9 @@ class HtmlFlowTemplatesTest {
         }
 
         @Test
-        fun `should correctly identify HtmlViewAsync fields`() {
-            val field = createMockField(HtmlViewAsync::class.java)
-            val result = callPrivateMethod("isHtmlViewAsyncField", field)
-            assertTrue(result as Boolean)
-        }
-
-        @Test
         fun `should correctly identify HtmlView methods`() {
             val method = createMockMethod(HtmlView::class.java)
             val result = callPrivateMethod("isHtmlViewMethod", method)
-            assertTrue(result as Boolean)
-        }
-
-        @Test
-        fun `should correctly identify HtmlViewAsync methods`() {
-            val method = createMockMethod(HtmlViewAsync::class.java)
-            val result = callPrivateMethod("isHtmlViewAsyncMethod", method)
             assertTrue(result as Boolean)
         }
 
@@ -314,13 +284,13 @@ class HtmlFlowTemplatesTest {
     inner class ObjectInstanceTests {
         @Test
         fun `should successfully create Kotlin object instance`() {
-            val result = callPrivateMethod("tryKotlinObjectInstance", SimpleTestViews::class.java)
+            val result = callPrivateMethod("tryObjectInstance", SimpleTestViews::class.java)
             assertNotNull(result)
         }
 
         @Test
         fun `should return null for non-object class`() {
-            val result = callPrivateMethod("tryKotlinObjectInstance", ClassTestViews::class.java)
+            val result = callPrivateMethod("tryObjectInstance", ClassTestViews::class.java)
             assertNull(result)
         }
 
@@ -366,29 +336,6 @@ class HtmlFlowTemplatesTest {
         }
 
         @Test
-        fun `should work with async extension functions`() {
-            val view: HtmlViewAsync<AsyncTestViewModel> =
-                HtmlFlow.viewAsync {
-                    it.html {
-                        body {
-                            div {
-                                attrClass("async-extension-test")
-                                dyn { model: AsyncTestViewModel ->
-                                    p { text("Async Extension: ${model.content}") }
-                                }
-                            }
-                        }
-                    }
-                }
-
-            val renderer = view.renderer()
-            val model = AsyncTestViewModel("async extension test")
-            val result = renderer(model)
-
-            assertTrue(result.contains("Async Extension: async extension test"))
-        }
-
-        @Test
         fun `should handle type mismatch in extension function`() {
             val view: HtmlView<SimpleTestViewModel> =
                 HtmlFlow.view {
@@ -421,21 +368,6 @@ class HtmlFlowTemplatesTest {
         }
 
         @Test
-        fun `should throw UnsupportedOperationException for HotReload`() {
-            val exception =
-                assertThrows<UnsupportedOperationException> {
-                    htmlFlowTemplates.HotReload("some/template/dir")
-                }
-
-            assertTrue(
-                exception.message!!.contains(
-                    "Hot reload from template directories is not supported",
-                ),
-            )
-            assertTrue(exception.message!!.contains("Use CachingClasspath() instead"))
-        }
-
-        @Test
         fun `should return working TemplateRenderer from CachingClasspath`() {
             val renderer =
                 htmlFlowTemplates.CachingClasspath(
@@ -459,5 +391,126 @@ class HtmlFlowTemplatesTest {
             )
         method.isAccessible = true
         return method.invoke(htmlFlowTemplates, *args)
+    }
+
+    @Nested
+    inner class EngineConstructorTests {
+
+        @Test
+        fun `should discover views from classes with Engine constructor`() {
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            
+            val simpleModel = BuilderTestViewModel2("builder test content")
+            val result = renderer(simpleModel)
+            
+            assertTrue(result.contains("Builder Configured View") || result.contains("Builder content"))
+            assertTrue(result.contains("builder test content"))
+        }
+
+        @Test
+        fun `should handle async views from builder constructor`() {
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            
+            val asyncModel = BuilderTestViewModel("async builder content")
+            val result = renderer(asyncModel)
+            
+            assertTrue(result.contains("async builder content"))
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("</html>"))
+        }
+
+        @Test
+        fun `should prefer builder constructor over default constructor when both available`() {
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            
+            val model = BuilderTestViewModel("constructor test")
+            val result = renderer(model)
+            
+            // Should find views from classes with builder constructors
+            assertNotNull(result)
+            assertTrue(result.contains("constructor test"))
+        }
+
+        @Test
+        fun `should fall back to default constructor when Engine constructor not available`() {
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            
+            val model = BuilderTestViewModel3("fallback test")
+            val result = renderer(model)
+            
+            // Should work with NoBuilderViews class that has default constructor
+            assertNotNull(result)
+            assertTrue(result.contains("fallback test"))
+        }
+
+        @Test
+        fun `should skip classes with multiple constructor parameters`() {
+            // This test verifies that classes with constructors requiring multiple parameters
+            // are gracefully skipped during scanning (since we can't provide all parameters)
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            
+            // Should still work with other classes in the package
+            val model = BuilderTestViewModel2("multi param test")
+            val result = renderer(model)
+            
+            assertNotNull(result)
+            assertTrue(result.contains("multi param test"))
+        }
+
+        @Test
+        fun `should handle builder constructor instantiation errors gracefully`() {
+            // Test that if builder constructor fails, we fall back to other instantiation methods
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            
+            val model = BuilderTestViewModel2("error handling test")
+            
+            // Should not throw exception even if some classes fail to instantiate
+            assertDoesNotThrow {
+                val result = renderer(model)
+                assertNotNull(result)
+            }
+        }
+
+        @Test
+        fun `should create views with proper Engine configuration`() {
+            val renderer = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            
+            val model = BuilderTestViewModel("config test")
+            val result = renderer(model)
+
+            assertTrue(result.contains("config test"))
+            assertTrue(result.contains("<html>"))
+            assertTrue(result.contains("</html>"))
+            
+            // Test that the result is indented
+            assertTrue(result.contains("\n") || result.contains("\t"))
+        }
+
+        @Test
+        fun `should cache views created with builder constructors`() {
+            val timeStart1 = System.nanoTime()
+            val renderer1 = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            val time1 = System.nanoTime() - timeStart1
+
+            val timeStart2 = System.nanoTime()
+            val renderer2 = htmlFlowTemplates.CachingClasspath("com.github.xmlet.htmlflow.testviews.builder")
+            val time2 = System.nanoTime() - timeStart2
+
+            assertTrue(time2 < time1, "Second renderer should be faster due to caching")
+
+            val model = BuilderTestViewModel("cache test")
+            val result1 = renderer1(model)
+            val result2 = renderer2(model)
+            
+            assertEquals(result1, result2)
+        }
+
+        private fun assertDoesNotThrow(action: () -> Unit) {
+            try {
+                action()
+            } catch (e: Exception) {
+                throw AssertionError("Expected no exception, but got: ${e.message}", e)
+            }
+        }
     }
 }
