@@ -2,6 +2,7 @@ package com.github.xmlet.htmlflow
 
 import htmlflow.HtmlFlow
 import htmlflow.HtmlView
+import htmlflow.HtmlViewAsync
 import htmlflow.dyn
 import htmlflow.html
 import org.http4k.core.Body
@@ -40,7 +41,7 @@ val personView: HtmlView<Person> =
 
 fun main() {
     // first, create a Renderer - this can be a Caching instance or a HotReload for development
-    val renderer = HtmlFlowTemplates().CachingClasspath()
+    val renderer = HtmlFlowTemplates().HotReload()
 
     // first example uses a renderer to create a string
     val app: HttpHandler = {
