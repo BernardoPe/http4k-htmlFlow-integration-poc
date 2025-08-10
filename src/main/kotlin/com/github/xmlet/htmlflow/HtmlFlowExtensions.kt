@@ -7,7 +7,6 @@ import org.http4k.core.Body
 import org.http4k.core.ContentType
 import org.http4k.core.ContentType.Companion.TEXT_HTML
 import org.http4k.core.Response
-import org.http4k.core.Response.Companion.invoke
 import org.http4k.core.Status
 import org.http4k.core.Status.Companion.OK
 import org.http4k.core.with
@@ -16,45 +15,38 @@ import org.http4k.lens.string
 import org.http4k.template.TemplateRenderer
 import org.http4k.template.ViewModel
 import org.http4k.websocket.WsMessage
-import java.lang.UnsupportedOperationException
 
 /**
- * Creates a [TemplateRenderer] from an [HtmlView] using the Engine pattern.
+ * Creates a [TemplateRenderer] from an [HtmlView].
  *
- * The resulting renderer will perform synchronous rendering and includes
- * proper type checking and error handling. The view is pre-configured once
- * during renderer creation for optimal performance.
+ * The resulting renderer will perform synchronous rendering of the view model
+ * using the provided [HtmlView] instance.
  *
- * @param caching Whether to enable caching (true for production, false for development)
+ * @param caching Whether to enable caching. Caching improves performance by caching
+ * static HTML blocks, but prevents hot-reloading of templates. Set to false for development
+ * if dynamic template changes are expected on code reload.
+ *
  * @param threadSafe Whether the view should be thread-safe
  * @param indented Whether the HTML output should be indented
  *
- * @throws IllegalArgumentException if the provided ViewModel is not compatible
+ * @throws IllegalArgumentException if the provided ViewModel is not compatible with the view.
  */
 inline fun <reified T : ViewModel> HtmlView<T>.renderer(
-    caching: Boolean = true,
-    threadSafe: Boolean = false,
-    indented: Boolean = true
+    caching: Boolean = true, threadSafe: Boolean = false, indented: Boolean = true
 ): TemplateRenderer {
     val templateField = this::class.java.getDeclaredField("template").apply { isAccessible = true }
     val template = templateField.get(this) as HtmlTemplate
 
-    val engine = HtmlFlow.builder()
-        .caching(caching)
-        .threadSafe(threadSafe)
-        .indented(indented)
-        .build()
+    val engine = HtmlFlow.builder().caching(caching).threadSafe(threadSafe).indented(indented).build()
 
     val preConfiguredView = engine.view<T>(template)
 
     return { viewModel: ViewModel ->
         try {
-            @Suppress("UNCHECKED_CAST")
-            preConfiguredView.render(viewModel as T)
+            @Suppress("UNCHECKED_CAST") preConfiguredView.render(viewModel as T)
         } catch (e: ClassCastException) {
             throw IllegalArgumentException(
-                "ViewModel type mismatch for view ${this::class.simpleName}. " +
-                        "Expected: ${T::class.simpleName}, Got: ${viewModel::class.simpleName}",
+                "ViewModel type mismatch for view ${this::class.simpleName}. " + "Expected: ${T::class.simpleName}, Got: ${viewModel::class.simpleName}",
                 e,
             )
         }
@@ -88,10 +80,9 @@ fun <T : ViewModel> Body.Companion.viewModel(
     throw UnsupportedOperationException("Cannot parse a ViewModel")
 }, renderer::invoke)
 
-fun <T : ViewModel> WsMessage.Companion.viewModel(renderer: TypedTemplateRenderer<T>) =
-    string().map<T>({
-        throw UnsupportedOperationException("Cannot parse a ViewModel")
-    }, renderer::invoke)
+fun <T : ViewModel> WsMessage.Companion.viewModel(renderer: TypedTemplateRenderer<T>) = string().map<T>({
+    throw UnsupportedOperationException("Cannot parse a ViewModel")
+}, renderer::invoke)
 
 /**
  * Convenience method for generating a Response from a view model.
@@ -103,19 +94,13 @@ fun <T : ViewModel> TypedTemplateRenderer<T>.renderToResponse(
 ): Response = Response(status).with(CONTENT_TYPE of contentType).body(invoke(viewModel))
 
 fun <T : ViewModel> HtmlView<T>.rendererTyped(
-    caching: Boolean = true,
-    threadSafe: Boolean = false,
-    indented: Boolean = true
+    caching: Boolean = true, threadSafe: Boolean = false, indented: Boolean = true
 ): TypedTemplateRenderer<T> {
     val templateField = this::class.java.getDeclaredField("template").apply { isAccessible = true }
     val template = templateField.get(this) as HtmlTemplate
 
     // Create a Engine with the specified configuration and pre-configure the view
-    val engine = HtmlFlow.builder()
-        .caching(caching)
-        .threadSafe(threadSafe)
-        .indented(indented)
-        .build()
+    val engine = HtmlFlow.builder().caching(caching).threadSafe(threadSafe).indented(indented).build()
 
     val preConfiguredView = engine.view<T>(template)
 

@@ -2,7 +2,6 @@ package com.github.xmlet.htmlflow
 
 import htmlflow.HtmlFlow
 import htmlflow.HtmlView
-import htmlflow.HtmlViewAsync
 import htmlflow.dyn
 import htmlflow.html
 import org.http4k.core.Body
@@ -24,20 +23,19 @@ data class Person(val name: String, val age: Int) : ViewModel
 
 data class Person2(val name: String, val age: Int) : ViewModel
 
-val personView: HtmlView<Person> =
-    HtmlFlow.view {
-        it.html {
-            body {
-                div {
-                    attrClass("person-view")
-                    h2 { text("Person Details") }
-                    dyn { model: Person ->
-                        p { text("${model.name} is ${model.age} years old") }
-                    }
+val personView: HtmlView<Person> = HtmlFlow.view {
+    it.html {
+        body {
+            div {
+                attrClass("person-view")
+                h2 { text("Person Details") }
+                dyn { model: Person ->
+                    p { text("${model.name} is ${model.age} years old") }
                 }
             }
         }
     }
+}
 
 fun main() {
     // first, create a Renderer - this can be a Caching instance or a HotReload for development
@@ -77,7 +75,7 @@ fun main() {
         val viewModel2 = Person2("Bob", 45)
         val renderedView = renderer2(viewModel)
         try {
-            val renderedView2 = renderer2(viewModel2)
+            renderer2(viewModel2)
         } catch (e: Exception) {
             println("Error rendering view with Person2: ${e.stackTraceToString()}")
         }
