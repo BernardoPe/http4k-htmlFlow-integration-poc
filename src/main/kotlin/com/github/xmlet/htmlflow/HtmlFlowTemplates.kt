@@ -1,26 +1,18 @@
 package com.github.xmlet.htmlflow
 
+import htmlflow.HtmlFlow
+import htmlflow.HtmlTemplate
 import htmlflow.HtmlView
 import htmlflow.HtmlViewAsync
-import org.http4k.core.Body
-import org.http4k.core.ContentType
-import org.http4k.core.ContentType.Companion.TEXT_HTML
-import org.http4k.core.Response
-import org.http4k.core.Status
-import org.http4k.core.Status.Companion.OK
-import org.http4k.core.with
-import org.http4k.lens.Header.CONTENT_TYPE
-import org.http4k.lens.string
+import htmlflow.HtmlViewSuspend
 import org.http4k.template.TemplateRenderer
 import org.http4k.template.Templates
 import org.http4k.template.ViewModel
-import org.http4k.websocket.WsMessage
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.lang.UnsupportedOperationException
 import java.lang.reflect.Field
 import java.lang.reflect.Method
-import java.lang.reflect.Modifier
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
 import java.net.URI
@@ -28,39 +20,95 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.jar.JarEntry
 import java.util.jar.JarFile
+import kotlin.jvm.java
 
 /**
- * HtmlFlow template implementation that scans classpath for HtmlView instances
- * and provides template rendering capabilities.
+ * HtmlFlow template implementation that provides automatic discovery and rendering of HtmlView instances.
  *
- * This implementation only supports classpath-based template discovery and does not
- * support caching or hot reloading.
+ * If the views are explicitly configured, that configuration will be overridden
+ * by the one used in this class, depending on whether the [TemplateRenderer] is created with
+ * [Caching] or [HotReload] methods.
  *
- * Alternatively, use [HtmlView.renderer] or [HtmlViewAsync.renderer] to create
- * a [TemplateRenderer] directly from an [HtmlView] instance.
+ * This implementation scans the classpath for classes containing [HtmlView] or fields/methods
+ * and automatically registers them for template rendering. It supports various class patterns including:
+ *
+ * [HtmlViewAsync] and [HtmlViewSuspend] are not supported in this implementation.
+ *
+ * ### Kotlin Objects
+ * ```kotlin
+ * object MyViews {
+ *     val userView: HtmlView<UserViewModel> = HtmlFlow.view { ... }
+ * }
+ * ```
+ *
+ * ### Class with Default Constructor
+ * ```kotlin
+ * class ViewRepository {
+ *     val profileView: HtmlView<ProfileViewModel> = HtmlFlow.view { ... }
+ * }
+ * ```
+ *
+ * ### Factory Methods
+ * ```kotlin
+ * class ViewFactory {
+ *     fun getUserDashboard(): HtmlView<DashboardViewModel> = HtmlFlow.view { ... }
+ * }
+ * ```
+ *
+ * ### Engine Constructor
+ * ```kotlin
+ * class ConfigurableViews(private val engine: HtmlFlow.Engine) {
+ *     val dynamicView: HtmlView<DataViewModel> = engine.view { ... }
+ * }
+ * ```
+ *
+ * ### Top-Level Kotlin Properties
+ * ```kotlin
+ * val topLevelView: HtmlView<TopLevelViewModel> = HtmlFlow.view { ... }
+ * ```
+ *
+ * ### Top-Level Kotlin Functions
+ * ```kotlin
+ * fun topLevelView(): HtmlView<TopLevelViewModel> {
+ *    return HtmlFlow.view { ... }
+ * }
+ * ```
  */
 class HtmlFlowTemplates : Templates {
     override fun Caching(baseTemplateDir: String): TemplateRenderer {
         throw UnsupportedOperationException(
             "HtmlFlow: Template directory caching is not supported." +
-                "Use CachingClasspath() instead.",
+                    "Use CachingClasspath() instead.",
         )
     }
 
     override fun CachingClasspath(baseClasspathPackage: String): TemplateRenderer {
-        val viewRegistry = scanForHtmlViews(baseClasspathPackage)
+        val cachingEngine = HtmlFlow.builder()
+            .caching(true)
+            .indented(true)
+            .threadSafe(true)
+            .build()
+
+        val viewRegistry = scanForHtmlViews(baseClasspathPackage, cachingEngine)
         return createTemplateRenderer(viewRegistry)
     }
 
     override fun HotReload(baseTemplateDir: String): TemplateRenderer {
-        throw UnsupportedOperationException(
-            "HtmlFlow: Hot reload from template directories is not supported." +
-                " Use CachingClasspath() instead.",
-        )
+        val packagePath = baseTemplateDir.replace(Regex("^/+|/+$"), "").replace('/', '.').trim('.')
+        val hotReloadEngine = HtmlFlow.builder()
+            .caching(false)
+            .indented(true)
+            .threadSafe(true)
+            .build()
+
+        cachedViewRegistries.clear()
+        resolutionCache.clear()
+        val viewRegistry = scanForHtmlViews(packagePath, hotReloadEngine)
+        return createTemplateRenderer(viewRegistry)
     }
 
     companion object {
-        private val logger = LoggerFactory.getLogger(HtmlFlowTemplates::class.java)
+        private val logger = LoggerFactory.getLogger("[${HtmlFlowTemplates::class.simpleName}]")
 
         /**
          * Thread-safe cache for view registries, keyed by scanned package name.
@@ -69,11 +117,31 @@ class HtmlFlowTemplates : Templates {
         private val cachedViewRegistries = ConcurrentHashMap<String, Map<Class<*>, ViewInfo>>()
 
         /**
-         * Represents information about a discovered HTML view.
+         * Thread-safe cache for resolved view lookups to optimize repeated access to derived types.
+         * 
+         * When a ViewModel class is resolved via inheritance chain, interfaces, or assignable types
+         * (rather than direct registry lookup), the result is cached here to avoid re-traversing
+         * the resolution chain on subsequent renders of the same concrete type.
+         * 
+         * This cache is separate from the main registry to preserve semantic clarity:
+         * - Registry contains only explicitly declared generic types (e.g., HtmlView<BaseVm>)
+         * - Resolution cache contains inferred mappings (e.g., DerivedVm -> BaseVm's view)
+         */
+        private val resolutionCache = ConcurrentHashMap<Class<*>, ViewInfo>()
+
+        /**
+         * Represents metadata about a discovered HTML view during classpath scanning.
          *
-         * @property view The actual view instance (HtmlView or HtmlViewAsync)
-         * @property location Human-readable location description for debugging
-         * @property viewModelType The type of ViewModel this view expects
+         * This data class encapsulates all the information needed to identify, locate,
+         * and use a discovered view for template rendering.
+         *
+         * @property view The actual view instance (HtmlView or HtmlViewAsync) that can render templates
+         * @property location Human-readable location description for debugging and error messages 
+         *                   (e.g., "com.example.Views.userView" or "com.example.ViewFactory.createUserView()")
+         * @property viewModelType The type of ViewModel this view expects as input for rendering
+         *
+         * @see HtmlView
+         * @see HtmlViewAsync  
          */
         class ViewInfo(
             val view: Any,
@@ -111,25 +179,45 @@ class HtmlFlowTemplates : Templates {
     /**
      * Scans the specified package for HTML views, using caching to avoid redundant scans.
      *
-     * @param basePackage The root package to scan (empty string scans all packages)
+     * @param basePackage The root package to scan (empty string scans all packages).
+     *                   Use dot notation like "com.example.views"
+     * @param engine  engine configuration to apply to discovered views.
+     *                   views will be instantiated with this configuration.
      *
-     * @return Registry mapping ViewModel types to their corresponding view information
+     * @return Registry mapping ViewModel types to their corresponding view information.
+     *         Each ViewInfo contains the view instance, location metadata, and type information.
+     * 
+     * @throws IllegalStateException if duplicate views are found for the same ViewModel type
+     * @throws ClassNotFoundException if referenced classes cannot be loaded
+     * @throws IllegalAccessException if view fields/methods cannot be accessed
      */
-    private fun scanForHtmlViews(basePackage: String = ""): Map<Class<*>, ViewInfo> {
-        return cachedViewRegistries.computeIfAbsent(basePackage) { packageName ->
-            logger.info("Scanning package '$packageName' for HTML views...")
-            val registry = performPackageScan(packageName)
+    private fun scanForHtmlViews(basePackage: String = "", engine: HtmlFlow.Engine): Map<Class<*>, ViewInfo> {
+        val cacheKey = "$basePackage:${engine.hashCode()}"
+        return cachedViewRegistries.computeIfAbsent(cacheKey) { _ ->
+            logger.info("Scanning package '$basePackage' for HTML views...")
+            val registry = performPackageScan(basePackage, engine)
             logger.info(
-                "Successfully scanned package '$packageName' - found ${registry.size} HTML views",
+                "Successfully scanned package '$basePackage' - found ${registry.size} HTML views",
             )
             registry
         }
     }
 
     /**
-     * Performs the actual classpath scanning for the given package.
+     * Performs the classpath scanning for the given package.
+     *
+     * Iterates through all available classloaders attempting to enumerate resources that
+     * match the provided base package. For each discovered root it delegates to specific
+     * resource processors (filesystem or jar). 
+     *
+     * - Non-fatal exceptions in intermediate classloaders are logged at DEBUG and scanning continues.
+     * - The last classloader rethrows the exception to surface hard failures.
+     *
+     * @param basePackage Package to scan (dot notation). Empty string means full classpath (discouraged for perf).
+     * @param engine [HtmlFlow.Engine] used later to re-wrap raw views with configured behaviour.
+     * @return Immutable map of discovered view model class -> ViewInfo.
      */
-    private fun performPackageScan(basePackage: String): Map<Class<*>, ViewInfo> {
+    private fun performPackageScan(basePackage: String, engine: HtmlFlow.Engine): Map<Class<*>, ViewInfo> {
         val viewRegistry = mutableMapOf<Class<*>, ViewInfo>()
         val classLoaders = getAvailableClassLoaders()
         val packagePath = basePackage.replace('.', '/')
@@ -142,7 +230,7 @@ class HtmlFlowTemplates : Templates {
                 while (resources.hasMoreElements()) {
                     resourcesFound = true
                     val resource = resources.nextElement()
-                    processClasspathResource(resource, basePackage, viewRegistry)
+                    processClasspathResource(resource, basePackage, viewRegistry, engine)
                 }
                 if (resourcesFound) break
             } catch (e: Exception) {
@@ -160,6 +248,16 @@ class HtmlFlowTemplates : Templates {
         return viewRegistry.toMap()
     }
 
+    /**
+     * Provides an ordered and de-duplicated list of candidate classloaders used for discovery.
+     *
+     * Order of precedence:
+     * 1. Thread context classloader
+     * 2. The library's own defining classloader
+     * 3. The JVM system classloader
+     *
+     * Duplicates (e.g. when context == system) are removed while preserving order.
+     */
     private fun getAvailableClassLoaders(): List<ClassLoader> {
         return listOfNotNull(
             Thread.currentThread().contextClassLoader,
@@ -169,41 +267,50 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Processes a classpath resource (either file system directory or JAR entry).
+     * Dispatches handling of a concrete classpath resource based on its URL protocol.
+     *
+     * Supported protocols:
+     * - file : walks the directory tree rooted at the package path
+     * - jar   : streams jar entries filtering for classes under the package path
      */
     private fun processClasspathResource(
         resource: URL,
         basePackage: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         when (resource.protocol) {
-            "file" -> processFileSystemResource(resource, basePackage, viewRegistry)
-            "jar" -> processJarResource(resource, basePackage, viewRegistry)
+            "file" -> processFileSystemResource(resource, basePackage, viewRegistry, engine)
+            "jar" -> processJarResource(resource, basePackage, viewRegistry, engine)
             else -> logger.debug("Unsupported protocol: ${resource.protocol}")
         }
     }
 
     /**
-     * Processes resources from the file system.
+     * Walks a filesystem directory that corresponds to the target package and recursively
+     * delegates into sub-packages, loading candidate class files for further inspection.
      */
     private fun processFileSystemResource(
         resource: URL,
         basePackage: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         val packageDirectory = File(resource.toURI())
         if (packageDirectory.exists() && packageDirectory.isDirectory) {
-            scanDirectory(packageDirectory, basePackage, viewRegistry)
+            scanDirectory(packageDirectory, basePackage, viewRegistry, engine)
         }
     }
 
     /**
-     * Processes resources from JAR files, with package exclusion.
+     * Streams entries of a JAR file and loads only class files that belong to (or are nested
+     * under) the target package. Excluded packages are skipped early to reduce I/O and class loading.
      */
     private fun processJarResource(
         resource: URL,
         basePackage: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         val jarPath = resource.path.substringBefore("!")
         val jarFile = JarFile(URI(jarPath).path)
@@ -214,18 +321,21 @@ class HtmlFlowTemplates : Templates {
             .forEach { entry ->
                 val className = convertEntryNameToClassName(entry.name)
                 if (!shouldExcludeClass(className)) {
-                    loadAndScanClass(className, viewRegistry)
+                    loadAndScanClass(className, viewRegistry, engine)
                 }
             }
     }
 
     /**
-     * Recursively scans a directory for class files.
+     * Recursively scans a directory structure resolving fully qualified class names from
+     * relative paths, applying exclusion rules and delegating each discovered class to the
+     * reflective loading pipeline.
      */
     private fun scanDirectory(
         directory: File,
         packageName: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         if (shouldExcludePackage(packageName)) {
             logger.debug("Skipping excluded package directory: $packageName")
@@ -238,23 +348,29 @@ class HtmlFlowTemplates : Templates {
             when {
                 file.isDirectory -> {
                     val subPackage = buildSubPackageName(packageName, file.name)
-                    scanDirectory(file, subPackage, viewRegistry)
+                    scanDirectory(file, subPackage, viewRegistry, engine)
                 }
 
                 isRelevantClassFile(file) -> {
                     val className = buildClassName(packageName, file.nameWithoutExtension)
-                    loadAndScanClass(className, viewRegistry)
+                    loadAndScanClass(className, viewRegistry, engine)
                 }
             }
         }
     }
 
     /**
-     * Method to load and scan a class.
+     * Attempts to load a class by name and, if successful, inspects it (and its associated
+     * Kotlin file facade where applicable) for view definitions.
+     *
+     * Exclusion checks are performed before any reflective work. Non fatal linkage / definition
+     * issues for individual classes are logged and skipped; unexpected exceptions propagate so
+     * callers can decide fail strategy.
      */
     private fun loadAndScanClass(
         className: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         if (shouldExcludeClass(className)) {
             logger.debug("Skipping excluded class: $className")
@@ -263,10 +379,10 @@ class HtmlFlowTemplates : Templates {
 
         try {
             val clazz = Class.forName(className)
-            scanClassForHtmlViews(clazz, viewRegistry)
+            scanClassForHtmlViews(clazz, viewRegistry, engine)
 
             if (!className.endsWith("Kt")) {
-                tryLoadAndScanKotlinFileClass(className, viewRegistry)
+                tryLoadAndScanKotlinFileClass(className, viewRegistry, engine)
             }
         } catch (_: ClassNotFoundException) {
             logger.debug("Class not found: $className")
@@ -279,35 +395,36 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Attempts to load and scan the Kotlin file class for top-level properties.
-     * For example, if we have "com.example.Main", this will try "com.example.MainKt".
+     * Attempts to load and scan the Kotlin file (Kt) class in order to process
+     * top-level properties or functions returning views.
      */
     private fun tryLoadAndScanKotlinFileClass(
         originalClassName: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         try {
             val kotlinFileClassName = "${originalClassName}Kt"
             val kotlinFileClass = Class.forName(kotlinFileClassName)
-            scanClassForHtmlViews(kotlinFileClass, viewRegistry)
+            scanClassForHtmlViews(kotlinFileClass, viewRegistry, engine)
         } catch (_: ClassNotFoundException) {
         } catch (e: Exception) {
-            logger.debug("Failed to scan Kotlin file class for: $originalClassName", e)
+           logger.debug("Failed to scan Kotlin file class for: $originalClassName", e)
         }
     }
 
-    /**
-     * Scans a loaded class for HTML view fields and methods.
-     */
     private fun scanClassForHtmlViews(
         clazz: Class<*>,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         if (shouldSkipClass(clazz)) return
-
         try {
-            val objectInstance = createInstanceForScanning(clazz)
-            scanClassMembers(clazz, objectInstance, viewRegistry)
+            val objectInstance = createInstanceForScanning(clazz, engine)
+            if (objectInstance == null && !clazz.constructors.isEmpty()) {
+                return
+            }
+            scanClassMembers(clazz, objectInstance, viewRegistry, engine)
         } catch (e: Exception) {
             logger.debug("Failed to scan class: ${clazz.name}", e)
             throw e
@@ -315,21 +432,31 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Enhanced method to handle Kotlin companion objects and top-level properties.
+     * Creates an instance of a class for scanning purposes using multiple instantiation strategies.
+     *
+     * For Kotlin file classes (ending with "Kt"), returns null since top-level properties
+     * don't require instance creation.
+     *
+     * @param clazz The class to instantiate for view scanning
+     * @param engine Optional Engine to pass to constructor-based instantiation.
+     *                   Used for classes that require builder configuration.
+     * @return Class instance for scanning, or null if no suitable instantiation method found
+     *         or if the class represents Kotlin top-level declarations
      */
-    private fun createInstanceForScanning(clazz: Class<*>): Any? {
+    private fun createInstanceForScanning(clazz: Class<*>, engine: HtmlFlow.Engine? = null): Any? {
         // For Kotlin file classes (top-level properties), we don't need an instance
         if (clazz.name.endsWith("Kt")) {
             return null
         }
 
-        return tryKotlinObjectInstance(clazz)
-            ?: tryKotlinCompanionObject(clazz)
-            ?: trySingletonInstance(clazz)
+        return tryObjectInstance(clazz)
             ?: tryDefaultConstructor(clazz)
+            ?: tryViewEngineConstructor(clazz, engine)
+            ?: tryCompanionObject(clazz)
+            ?: trySingletonInstance(clazz)
     }
 
-    private fun tryKotlinObjectInstance(clazz: Class<*>): Any? {
+    private fun tryObjectInstance(clazz: Class<*>): Any? {
         return try {
             clazz.getDeclaredField("INSTANCE").get(null)
         } catch (_: Exception) {
@@ -337,10 +464,7 @@ class HtmlFlowTemplates : Templates {
         }
     }
 
-    /**
-     * Tries to get a Kotlin companion object instance.
-     */
-    private fun tryKotlinCompanionObject(clazz: Class<*>): Any? {
+    private fun tryCompanionObject(clazz: Class<*>): Any? {
         return try {
             val companionClass = clazz.declaredClasses.find { it.simpleName == "Companion" }
             companionClass?.getDeclaredField("INSTANCE")?.get(null)
@@ -365,94 +489,89 @@ class HtmlFlowTemplates : Templates {
         }
     }
 
+    private fun tryViewEngineConstructor(clazz: Class<*>, engine: HtmlFlow.Engine?): Any? {
+        if (engine == null) return null
+
+        return try {
+            val constructor = clazz.getDeclaredConstructor(HtmlFlow.Engine::class.java)
+            constructor.isAccessible = true
+            constructor.newInstance(engine)
+        } catch (_: NoSuchMethodException) {
+            null
+        } catch (e: Exception) {
+            logger.debug("Failed to create instance using Engine constructor for ${clazz.name}", e)
+            null
+        }
+    }
+
     /**
-     * Scans class members (fields, methods, and top-level properties) for HTML views.
+     * Performs scanning of both methods and fields of the supplied class instance for
+     * HtmlView definitions.
      */
     private fun scanClassMembers(
         clazz: Class<*>,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
-        scanMethodsForViews(clazz, objectInstance, viewRegistry)
-        scanFieldsForViews(clazz, objectInstance, viewRegistry)
-        scanTopLevelPropertiesForViews(clazz, viewRegistry)
+        scanMethodsForViews(clazz, objectInstance, viewRegistry, engine)
+        scanFieldsForViews(clazz, objectInstance, viewRegistry, engine)
     }
 
     /**
-     * Scans class methods for HTML views.
+     * Identifies zero-arg methods whose return type is assignable to HtmlView and invokes them
+     * (lazily instantiating the containing class if required) registering each resulting view.
      */
     private fun scanMethodsForViews(
         clazz: Class<*>,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         clazz.declaredMethods
             .filter { method -> isRelevantViewMethod(method) }
-            .forEach { method -> processViewMethod(method, objectInstance, viewRegistry) }
+            .forEach { method -> processViewMethod(method, objectInstance, viewRegistry, engine) }
     }
 
     /**
-     * Scans class fields for HTML views.
+     * Inspects declared fields for HtmlView types, accessing private/protected members when needed
+     * (by setting accessibility) and registering discovered view instances.
      */
     private fun scanFieldsForViews(
         clazz: Class<*>,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         clazz.declaredFields
-            .filter { field -> isRelevantViewField(field) && !Modifier.isStatic(field.modifiers) }
-            .forEach { field -> processViewField(field, objectInstance, viewRegistry) }
+            .filter { field -> isRelevantViewField(field) }
+            .forEach { field -> processViewField(field, objectInstance, viewRegistry, engine) }
     }
 
     /**
-     * Scans for top-level Kotlin properties that contain HTML views.
-     * Top-level properties in Kotlin are compiled as static fields in a companion class
-     * with names ending in "Kt".
-     */
-    private fun scanTopLevelPropertiesForViews(
-        clazz: Class<*>,
-        viewRegistry: MutableMap<Class<*>, ViewInfo>,
-    ) {
-        // Skip if this is not a Kotlin file class
-        if (!clazz.name.endsWith("Kt")) return
-
-        try {
-            // Top-level properties are compiled as static fields
-            clazz.declaredFields
-                .filter { field ->
-                    Modifier.isStatic(field.modifiers) &&
-                        !field.isSynthetic &&
-                        isRelevantViewField(field)
-                }
-                .forEach { field ->
-                    processTopLevelViewProperty(field, viewRegistry)
-                }
-        } catch (e: Exception) {
-            logger.debug("Failed to scan top-level properties in class: ${clazz.name}", e)
-        }
-    }
-
-    /**
-     * Checks if a JAR entry represents a relevant class file.
+     * Fast predicate used while streaming jar entries to narrow down to concrete top-level
+     * class files under the target package path.
      */
     private fun isRelevantClassEntry(
         entry: JarEntry,
         packagePath: String,
     ): Boolean {
         return !entry.isDirectory &&
-            entry.name.startsWith(packagePath) &&
-            entry.name.endsWith(".class")
+                entry.name.startsWith(packagePath) &&
+                entry.name.endsWith(".class")
     }
 
     /**
-     * Converts JAR entry name to fully qualified class name.
+     * Converts a jar entry path (e.g. com/example/Foo.class) into a canonical FQN
+     * (e.g. com.example.Foo).
      */
     private fun convertEntryNameToClassName(entryName: String): String {
         return entryName.removeSuffix(".class").replace('/', '.')
     }
 
     /**
-     * Checks if a package should be excluded from scanning.
+     * Determines whether a package should be skipped based on static exclusion prefixes
+     * (used to avoid descending into large framework / JDK namespaces).
      */
     private fun shouldExcludePackage(packageName: String): Boolean {
         return EXCLUDED_PACKAGES.any { excludedPackage ->
@@ -461,7 +580,8 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Checks if a class name should be excluded from scanning.
+     * Determines whether a fully qualified class name should be ignored according to the
+     * same exclusion rules as packages (simple prefix comparison).
      */
     private fun shouldExcludeClass(className: String): Boolean {
         return EXCLUDED_PACKAGES.any { excludedPackage ->
@@ -470,63 +590,88 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Processes a method that returns an HTML view.
+     * Invokes a candidate method and registers the resulting HtmlView. When an Engine
+     * is provided, the method result is re-wrapped to honour global rendering settings.
      */
     private fun processViewMethod(
         method: Method,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         method.isAccessible = true
-        val view = method.invoke(objectInstance) ?: return
+        val originalView = if (method.parameterCount == 1 && method.parameterTypes[0] == HtmlFlow.Engine::class.java) {
+            method.invoke(objectInstance, engine)
+        } else {
+            method.invoke(objectInstance)
+        } ?: return
         val location = "${method.declaringClass.name}.${method.name}()"
-        registerView(view, method.genericReturnType, viewRegistry, location)
+
+        val viewToRegister = if (originalView is HtmlView<*>) {
+            createPreConfiguredView(originalView, engine)
+        } else {
+            originalView
+        }
+
+        registerView(viewToRegister, method.genericReturnType, viewRegistry, location)
     }
 
     /**
-     * Processes a field that contains an HTML view.
+     * Reads a candidate HtmlView field and registers it, optionally re-wrapping using the
+     * configured Engine. Access exceptions are swallowed (logged at DEBUG) to keep discovery robust.
      */
     private fun processViewField(
         field: Field,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
+        engine: HtmlFlow.Engine,
     ) {
         try {
             field.isAccessible = true
-            val view = field.get(objectInstance) ?: return
+            val originalView = field.get(objectInstance) ?: return
             val location = "${field.declaringClass.name}.${field.name}"
-            registerView(view, field.genericType, viewRegistry, location)
+
+            val viewToRegister = if (originalView is HtmlView<*>) {
+                createPreConfiguredView(originalView, engine)
+            } else {
+                originalView
+            }
+
+            registerView(viewToRegister, field.genericType, viewRegistry, location)
         } catch (e: Exception) {
-            logger.debug("Failed to process view field: ${field.name}", e)
+           logger.debug("Failed to process view field: ${field.name}", e)
         }
     }
 
     /**
-     * Processes a top-level property that contains an HTML view.
+     * Produces a new HtmlView instance that shares the original template but is constructed via
+     * the supplied Engine so that engine-level settings (indentation, caching, thread-safety) apply.
+     * Falls back to the original view on any reflection issue.
      */
-    private fun processTopLevelViewProperty(
-        field: Field,
-        viewRegistry: MutableMap<Class<*>, ViewInfo>,
-    ) {
-        try {
-            field.isAccessible = true
-            val view = field.get(null) ?: return // Static field, so pass null as instance
-            val location = "${field.declaringClass.name}.${field.name} (top-level property)"
-            registerView(view, field.genericType, viewRegistry, location)
+    private fun createPreConfiguredView(originalView: HtmlView<*>, engine: HtmlFlow.Engine): HtmlView<*> {
+        return try {
+            // Extract the template from the original view
+            val templateField = originalView::class.java.getDeclaredField("template").apply { isAccessible = true }
+            val template = templateField.get(originalView) as HtmlTemplate
+
+            // Create a new view with the Engine configuration
+            engine.view<Any>(template)
         } catch (e: Exception) {
-            logger.debug("Failed to process top-level view property: ${field.name}", e)
+            logger.debug("Failed to create pre-configured view, using original", e)
+            originalView
         }
     }
 
     /**
-     * Checks if a file is a relevant class file (not inner classes).
+     * Determines whether the file corresponds to a top-level compiled class (filters out
+     * synthetic / inner classes by excluding names containing the '$' delimiter).
      */
     private fun isRelevantClassFile(file: File): Boolean {
         return file.name.endsWith(".class") && !file.name.contains('$')
     }
 
     /**
-     * Builds a sub-package name from parent package and directory name.
+     * Constructs the new package FQN when descending into a subdirectory during filesystem scan.
      */
     private fun buildSubPackageName(
         parentPackage: String,
@@ -536,7 +681,7 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Builds a fully qualified class name.
+     * Joins the package name and simple class name into a FQN, handling root package edge case.
      */
     private fun buildClassName(
         packageName: String,
@@ -546,37 +691,30 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Determines if a class should be skipped during scanning.
+     * Early exclusion predicate for types that cannot hold concrete HtmlView instances.
      */
     private fun shouldSkipClass(clazz: Class<*>): Boolean {
         return clazz.isInterface || clazz.isAnnotation || clazz.isEnum
     }
 
     /**
-     * Determines if a method is a relevant HTML view method.
+     * Predicate identifying candidate methods (zero args or single Engine arg, non-synthetic, HtmlView return type).
      */
     private fun isRelevantViewMethod(method: Method): Boolean {
         return !method.isSynthetic &&
-            method.parameterCount == 0 &&
-            (isHtmlViewMethod(method) || isHtmlViewAsyncMethod(method))
+                (method.parameterCount == 0 ||
+                        (method.parameterCount == 1 && method.parameterTypes[0] == HtmlFlow.Engine::class.java)) &&
+                isHtmlViewMethod(method)
     }
 
     private fun isHtmlViewMethod(method: Method): Boolean = HtmlView::class.java.isAssignableFrom(method.returnType)
 
-    private fun isHtmlViewAsyncMethod(method: Method): Boolean =
-        HtmlViewAsync::class.java.isAssignableFrom(method.returnType)
-
-    /**
-     * Determines if a field is a relevant HTML view field.
-     */
     private fun isRelevantViewField(field: Field): Boolean {
-        return !field.isSynthetic &&
-            (isHtmlViewField(field) || isHtmlViewAsyncField(field))
+        return !field.isSynthetic && isHtmlViewField(field)
     }
 
     private fun isHtmlViewField(field: Field): Boolean = HtmlView::class.java.isAssignableFrom(field.type)
 
-    private fun isHtmlViewAsyncField(field: Field): Boolean = HtmlViewAsync::class.java.isAssignableFrom(field.type)
 
     /**
      * Registers a discovered view in the registry.
@@ -609,14 +747,11 @@ class HtmlFlowTemplates : Templates {
         if (existing != null) {
             throw IllegalStateException(
                 "Multiple views found for ViewModel type '${viewModelType.simpleName}'. " +
-                    "Existing: ${existing.location}, New: $newLocation",
+                        "Existing: ${existing.location}, New: $newLocation",
             )
         }
     }
 
-    /**
-     * Extracts the ViewModel type from a generic type (e.g., HtmlView<MyViewModel>).
-     */
     private fun extractViewModelType(genericType: Type): Class<*>? {
         return when (genericType) {
             is ParameterizedType -> extractFromParameterizedType(genericType)
@@ -646,7 +781,9 @@ class HtmlFlowTemplates : Templates {
     /**
      * Creates a template renderer from the view registry.
      */
-    private fun createTemplateRenderer(viewRegistry: Map<Class<*>, ViewInfo>): TemplateRenderer {
+    private fun createTemplateRenderer(
+        viewRegistry: Map<Class<*>, ViewInfo>
+    ): TemplateRenderer {
         return object : TemplateRenderer {
             override fun invoke(viewModel: ViewModel): String {
                 val viewInfo = findCompatibleView(viewModel, viewRegistry)
@@ -656,8 +793,46 @@ class HtmlFlowTemplates : Templates {
     }
 
     /**
-     * Finds a compatible view for the given ViewModel.
-     * Uses inheritance hierarchy and interface matching for flexibility.
+     * Finds a compatible view for the given ViewModel by applying a precedence chain with caching:
+     *
+     * 1. Exact class match in registry (fastest)
+     * 2. Resolution cache lookup (for previously resolved indirect matches)
+     * 3. Full resolution chain:
+     *    a. Superclass match (nearest ancestor first)
+     *    b. Direct interface match
+     *    c. Assignable match (any registered type that isAssignableFrom the model's class)
+     * 4. Cache successful resolution for future lookups
+     *
+     * Example usages:
+     * ```kotlin
+     * // 1. Direct match
+     * data class UserVm(val name: String) : ViewModel
+     * val userView: HtmlView<UserVm> = HtmlFlow.view { ... }
+     * // registry contains (UserVm -> userView). Rendering UserVm finds userView immediately.
+     *
+     * // 2. Cached resolution (second+ render of derived type)
+     * open class BaseVm : ViewModel
+     * class DerivedVm : BaseVm()
+     * // First render: walks inheritance chain, finds BaseVm view, caches DerivedVm -> BaseVm view
+     * // Second render: cache hit, no traversal needed
+     *
+     * // 3. Superclass match
+     * open class BaseVm : ViewModel
+     * class DerivedVm : BaseVm()
+     * val baseView: HtmlView<BaseVm> = HtmlFlow.view { ... }
+     * // registry has BaseVm only; rendering DerivedVm walks inheritance and uses baseView.
+     *
+     * // 4. Interface match
+     * interface ProfileLike : ViewModel { val name: String }
+     * data class PublicProfile(override val name: String) : ProfileLike
+     * val profileView: HtmlView<ProfileLike> = HtmlFlow.view { ... }
+     * // registry key is ProfileLike; rendering PublicProfile matches interface.
+     *
+     * // 5. Assignable fallback (when no inheritance/interface match exists) (QUESTION: does it make sense to support this?)
+     * val anyView: HtmlView<Any> = HtmlFlow.view { ... }  // View that accepts any type
+     * data class UnrelatedVm(val data: String) : ViewModel  // No inheritance chain to Any
+     * // Registry has Any; UnrelatedVm has no superclass/interface matches, but Any.isAssignableFrom(UnrelatedVm) = true
+     * ```
      */
     private fun findCompatibleView(
         viewModel: ViewModel,
@@ -665,9 +840,32 @@ class HtmlFlowTemplates : Templates {
     ): ViewInfo {
         val viewModelClass = viewModel::class.java
 
-        // Direct match
+        // Direct match in registry (fastest path)
         viewRegistry[viewModelClass]?.let { return it }
 
+        // Check resolution cache for previously resolved indirect matches
+        resolutionCache[viewModelClass]?.let { return it }
+
+        // Perform full resolution chain and cache the result
+        val resolved = resolveViewThroughHierarchy(viewModelClass, viewRegistry)
+        
+        // Cache the resolved view for future lookups (only if found)
+        resolved?.let { resolutionCache[viewModelClass] = it }
+        
+        return resolved ?: throw IllegalArgumentException(
+            "No compatible HtmlView found for ViewModel type: ${viewModelClass.simpleName}. " +
+                    "Available views: ${viewRegistry.keys.joinToString { it.simpleName }}",
+        )
+    }
+
+    /**
+     * Performs the full view resolution chain for types not found directly in the registry.
+     * Separated from findCompatibleView to enable clean caching logic.
+     */
+    private fun resolveViewThroughHierarchy(
+        viewModelClass: Class<*>,
+        viewRegistry: Map<Class<*>, ViewInfo>,
+    ): ViewInfo? {
         // Check inheritance hierarchy
         findViewInInheritanceChain(viewModelClass, viewRegistry)?.let { return it }
 
@@ -677,11 +875,7 @@ class HtmlFlowTemplates : Templates {
         // Check assignable types
         findAssignableView(viewModelClass, viewRegistry)?.let { return it }
 
-        // No compatible view found
-        throw IllegalArgumentException(
-            "No compatible HtmlView found for ViewModel type: ${viewModelClass.simpleName}. " +
-                "Available views: ${viewRegistry.keys.joinToString { it.simpleName }}",
-        )
+        return null
     }
 
     private fun findViewInInheritanceChain(
@@ -689,7 +883,7 @@ class HtmlFlowTemplates : Templates {
         viewRegistry: Map<Class<*>, ViewInfo>,
     ): ViewInfo? {
         var currentClass: Class<*>? = viewModelClass.superclass
-        while (currentClass != null) {
+        while (currentClass != null && currentClass != Any::class.java) {
             viewRegistry[currentClass]?.let { return it }
             currentClass = currentClass.superclass
         }
@@ -726,8 +920,9 @@ class HtmlFlowTemplates : Templates {
     ): String {
         return try {
             when (view) {
-                is HtmlView<*> -> renderSynchronousView(view, viewModel)
-                is HtmlViewAsync<*> -> renderAsynchronousView(view, viewModel)
+                is HtmlView<*> -> {
+                    renderSynchronousView(view, viewModel)
+                }
                 else -> throw IllegalArgumentException(
                     "Unsupported view type: ${view::class.simpleName} at $location",
                 )
@@ -746,117 +941,5 @@ class HtmlFlowTemplates : Templates {
         viewModel: ViewModel,
     ): String {
         return (view as HtmlView<ViewModel>).render(viewModel)
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun renderAsynchronousView(
-        view: HtmlViewAsync<*>,
-        viewModel: ViewModel,
-    ): String {
-        // Note: HTTP4k doesn't support async rendering, so we block and wait for the result
-        return (view as HtmlViewAsync<ViewModel>).renderAsync(viewModel).get()
-    }
-}
-
-/**
- * Creates a [TemplateRenderer] from an [HtmlView].
- *
- * The resulting renderer will perform synchronous rendering and includes
- * proper type checking and error handling.
- *
- * @throws IllegalArgumentException if the provided ViewModel is not compatible
- */
-inline fun <reified T : ViewModel> HtmlView<T>.renderer(): TemplateRenderer {
-    return { viewModel: ViewModel ->
-        try {
-            @Suppress("UNCHECKED_CAST")
-            this.render(viewModel as T)
-        } catch (e: ClassCastException) {
-            throw IllegalArgumentException(
-                "ViewModel type mismatch for view ${this::class.simpleName}. " +
-                    "Expected: ${T::class.simpleName}, Got: ${viewModel::class.simpleName}",
-                e,
-            )
-        }
-    }
-}
-
-/**
- * Creates a [TemplateRenderer] from an [HtmlViewAsync].
- *
- * The resulting renderer will block and wait for asynchronous rendering to complete.
- *
- * @throws IllegalArgumentException if the provided ViewModel is not compatible
- *
- */
-inline fun <reified T : ViewModel> HtmlViewAsync<T>.renderer(): TemplateRenderer {
-    return { viewModel: ViewModel ->
-        try {
-            @Suppress("UNCHECKED_CAST")
-            this.renderAsync(viewModel as T).get()
-        } catch (e: ClassCastException) {
-            throw IllegalArgumentException(
-                "ViewModel type mismatch for async view ${this::class.simpleName}. " +
-                    "Expected: ${T::class.simpleName}, Got: ${viewModel::class.simpleName}",
-                e,
-            )
-        }
-    }
-}
-
-// Suggested strongly typed template renderer interface for HTTP4K.
-//
-// This interface provides compile-time type safety for template rendering by accepting
-// a specific ViewModel type parameter instead of the generic ViewModel interface.
-//
-// Why TypedTemplateRenderer is needed:
-//
-// The standard HTTP4K TemplateRenderer has the signature `(ViewModel) -> String`, which means:
-// - Views must accept the generic ViewModel interface as a parameter
-// - No compile-time type safety when passing specific ViewModel implementations
-// - Runtime casting is required within view implementations
-//
-// TypedTemplateRenderer solves this by:
-// - Accepting a specific ViewModel type T that extends ViewModel
-// - Providing compile-time type checking
-// - Eliminating the need for runtime casting in view code
-interface TypedTemplateRenderer<T : ViewModel> {
-    operator fun invoke(viewModel: T): String
-}
-
-fun <T : ViewModel> Body.Companion.viewModel(
-    renderer: TypedTemplateRenderer<T>,
-    contentType: ContentType,
-) = string(contentType).map<T>({
-    throw UnsupportedOperationException("Cannot parse a ViewModel")
-}, renderer::invoke)
-
-fun <T : ViewModel> WsMessage.Companion.viewModel(renderer: TypedTemplateRenderer<T>) =
-    string().map<T>({
-        throw UnsupportedOperationException("Cannot parse a ViewModel")
-    }, renderer::invoke)
-
-/**
- * Convenience method for generating a Response from a view model.
- */
-fun <T : ViewModel> TypedTemplateRenderer<T>.renderToResponse(
-    viewModel: T,
-    status: Status = OK,
-    contentType: ContentType = TEXT_HTML,
-): Response = Response(status).with(CONTENT_TYPE of contentType).body(invoke(viewModel))
-
-fun <T : ViewModel> HtmlView<T>.rendererTyped(): TypedTemplateRenderer<T> {
-    return object : TypedTemplateRenderer<T> {
-        override fun invoke(viewModel: T): String {
-            return this@rendererTyped.render(viewModel)
-        }
-    }
-}
-
-fun <T : ViewModel> HtmlViewAsync<T>.rendererTyped(): TypedTemplateRenderer<T> {
-    return object : TypedTemplateRenderer<T> {
-        override fun invoke(viewModel: T): String {
-            return this@rendererTyped.renderAsync(viewModel).get()
-        }
     }
 }
