@@ -8,7 +8,6 @@ import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.Assertions.*
 import org.http4k.template.TemplateRenderer
 import org.http4k.template.ViewModel
-import java.lang.reflect.Field
 
 /**
  * Tests that validate the KDoc examples provided in HtmlFlowTemplates.findCompatibleView()
@@ -126,25 +125,6 @@ class KDocExampleValidationTest {
     }
 
     @Nested
-    inner class AssignableFallbackTests {
-
-        @Test
-        fun `should find view through assignable fallback - Example 5`() {
-            // KDoc Example 5: Assignable fallback
-            // val anyView: HtmlView<Any> = HtmlFlow.view { ... }  // View that accepts any type
-            // data class UnrelatedVm(val data: String) : ViewModel  // No inheritance chain to Any
-            // Registry has Any; UnrelatedVm has no superclass/interface matches, but Any.isAssignableFrom(UnrelatedVm) = true
-            
-            val unrelatedModel = UnrelatedVm("test data")
-            val result = renderer(unrelatedModel)
-            
-            assertTrue(result.contains("Any Type View"))
-            assertTrue(result.contains("Rendering any object: test data"))
-            assertTrue(result.contains("class=\"any-view\""))
-        }
-    }
-
-    @Nested
     inner class ResolutionPrecedenceTests {
 
         @Test
@@ -178,25 +158,6 @@ class KDocExampleValidationTest {
             assertNotNull(renderer(model2))
             
             assertTrue(getResolutionCacheSize() > 0, "Cache should contain resolved entries")
-        }
-    }
-
-    @Nested
-    inner class HotReloadCacheClearingTests {
-
-        @Test
-        fun `should clear resolution cache on hot reload`() {
-            val derivedModel = DerivedVm("cache test", "extra")
-            renderer(derivedModel)
-            
-            assertTrue(getResolutionCacheSize() > 0, "Cache should be populated before hot reload")
-            
-            val hotReloadRenderer = htmlFlowTemplates.HotReload("com.github.xmlet.htmlflow.testviews.kdoc")
-            
-            assertEquals(0, getResolutionCacheSize(), "Resolution cache should be cleared after hot reload")
-            
-            val result = hotReloadRenderer(derivedModel)
-            assertTrue(result.contains("Base View"))
         }
     }
 

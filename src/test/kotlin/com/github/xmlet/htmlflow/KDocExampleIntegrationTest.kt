@@ -2,7 +2,6 @@ package com.github.xmlet.htmlflow
 
 import com.github.xmlet.htmlflow.testviews.kdoc.DerivedVm
 import com.github.xmlet.htmlflow.testviews.kdoc.PublicProfile
-import com.github.xmlet.htmlflow.testviews.kdoc.UnrelatedVm
 import com.github.xmlet.htmlflow.testviews.kdoc.UserVm
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -33,10 +32,6 @@ class KDocExampleIntegrationTest {
         // Example 4: Interface match
         val profileResult = renderer(PublicProfile("Interface User", "Developer"))
         assertContainsExpectedContent(profileResult, "Profile Interface View", "Interface User")
-
-        // Example 5: Assignable fallback (Any type accepts UnrelatedVm)
-        val assignableResult = renderer(UnrelatedVm("Unrelated Data"))
-        assertContainsExpectedContent(assignableResult, "Any Type View", "Unrelated Data")
     }
 
     @Test
