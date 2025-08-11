@@ -22,28 +22,12 @@ import org.http4k.websocket.WsMessage
  * The resulting renderer will perform synchronous rendering of the view model
  * using the provided [HtmlView] instance.
  *
- * @param caching Whether to enable caching. Caching improves performance by caching
- * static HTML blocks, but prevents hot-reloading of templates. Set to false for development
- * if dynamic template changes are expected on code reload.
- *
- * @param threadSafe Whether the view should be thread-safe
- * @param indented Whether the HTML output should be indented
- *
- * @throws IllegalArgumentException if the provided ViewModel is not compatible with the view.
+ * @throws IllegalArgumentException if the provided [ViewModel] is not compatible with [T].
  */
-inline fun <reified T : ViewModel> HtmlView<T>.renderer(
-    caching: Boolean = true, threadSafe: Boolean = false, indented: Boolean = true
-): TemplateRenderer {
-    val templateField = this::class.java.getDeclaredField("template").apply { isAccessible = true }
-    val template = templateField.get(this) as HtmlTemplate
-
-    val engine = HtmlFlow.builder().caching(caching).threadSafe(threadSafe).indented(indented).build()
-
-    val preConfiguredView = engine.view<T>(template)
-
+inline fun <reified T : ViewModel> HtmlView<T>.renderer(): TemplateRenderer {
     return { viewModel: ViewModel ->
         try {
-            @Suppress("UNCHECKED_CAST") preConfiguredView.render(viewModel as T)
+            @Suppress("UNCHECKED_CAST") this.render(viewModel as T)
         } catch (e: ClassCastException) {
             throw IllegalArgumentException(
                 "ViewModel type mismatch for view ${this::class.simpleName}. " + "Expected: ${T::class.simpleName}, Got: ${viewModel::class.simpleName}",
@@ -99,8 +83,7 @@ fun <T : ViewModel> HtmlView<T>.rendererTyped(
     val templateField = this::class.java.getDeclaredField("template").apply { isAccessible = true }
     val template = templateField.get(this) as HtmlTemplate
 
-    // Create a Engine with the specified configuration and pre-configure the view
-    val engine = HtmlFlow.builder().caching(caching).threadSafe(threadSafe).indented(indented).build()
+    val engine = HtmlFlow.ViewFactory.builder().preEncoding(caching).threadSafe(threadSafe).indented(indented).build()
 
     val preConfiguredView = engine.view<T>(template)
 

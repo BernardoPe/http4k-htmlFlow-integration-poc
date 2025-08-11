@@ -58,21 +58,6 @@ object KDocExampleViews {
         }
     }
 
-    // Example 5: Assignable fallback - view that accepts Any type
-    val anyView: HtmlView<Any> = HtmlFlow.view {
-        it.html {
-            body {
-                div {
-                    attrClass("any-view")
-                    h2 { text("Any Type View") }
-                    dyn { model: Any ->
-                        p { text("Rendering any object: ${model}") }
-                    }
-                }
-            }
-        }
-    }
-
     val secondaryView: HtmlView<SecondaryInterface> = HtmlFlow.view {
         it.html {
             body {

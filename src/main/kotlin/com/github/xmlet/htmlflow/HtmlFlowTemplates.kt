@@ -1,7 +1,6 @@
 package com.github.xmlet.htmlflow
 
 import htmlflow.HtmlFlow
-import htmlflow.HtmlTemplate
 import htmlflow.HtmlView
 import htmlflow.HtmlViewAsync
 import htmlflow.HtmlViewSuspend
@@ -21,16 +20,18 @@ import java.util.jar.JarEntry
 import java.util.jar.JarFile
 
 /**
- * HtmlFlow template implementation that provides automatic discovery and rendering of HtmlView instances.
+ * HtmlFlow Templates implementation for rendering HTML views using the
+ * [HtmlFlow](https://github.com/xmlet/HtmlFlow) engine.
  *
- * If the views are explicitly configured, that configuration will be overridden
- * by the one used in this class, depending on whether the [TemplateRenderer] is created with
- * [Caching] or [HotReload] methods.
+ * If the views are explicitly configured, the pre encoding configuration will be overridden based on the
+ * method used to create the [TemplateRenderer]. [Caching] uses pre-encoding of static HTML blocks,
+ * while [HotReload] evaluates the template on each render.
+ *
+ * [HtmlViewAsync] and [HtmlViewSuspend] are not supported in this implementation.
  *
  * This implementation scans the classpath for classes containing [HtmlView] or fields/methods
  * and automatically registers them for template rendering. It supports various class patterns including:
  *
- * [HtmlViewAsync] and [HtmlViewSuspend] are not supported in this implementation.
  *
  * ### Kotlin Objects
  * ```kotlin
@@ -50,13 +51,6 @@ import java.util.jar.JarFile
  * ```kotlin
  * class ViewFactory {
  *     fun getUserDashboard(): HtmlView<DashboardViewModel> = HtmlFlow.view { ... }
- * }
- * ```
- *
- * ### Engine Constructor
- * ```kotlin
- * class ConfigurableViews(private val engine: HtmlFlow.Engine) {
- *     val dynamicView: HtmlView<DataViewModel> = engine.view { ... }
  * }
  * ```
  *
@@ -80,33 +74,33 @@ class HtmlFlowTemplates : Templates {
     }
 
     override fun CachingClasspath(baseClasspathPackage: String): TemplateRenderer {
-        val cachingEngine = HtmlFlow.builder().caching(true).indented(true).threadSafe(true).build()
-
-        val viewRegistry = scanForHtmlViews(baseClasspathPackage, cachingEngine)
-        return createTemplateRenderer(viewRegistry)
+        val viewRegistry = scanForHtmlViews(baseClasspathPackage, false)
+        return createTemplateRenderer(viewRegistry, false)
     }
 
     override fun HotReload(baseTemplateDir: String): TemplateRenderer {
         val packagePath = baseTemplateDir.replace(Regex("^/+|/+$"), "").replace('/', '.').trim('.')
-        val hotReloadEngine = HtmlFlow.builder().caching(false).indented(true).threadSafe(true).build()
-
-        cachedViewRegistries.clear()
-        resolutionCache.clear()
-        val viewRegistry = scanForHtmlViews(packagePath, hotReloadEngine)
-        return createTemplateRenderer(viewRegistry)
+        val viewRegistry = scanForHtmlViews(packagePath, true)
+        return createTemplateRenderer(viewRegistry, true)
     }
 
     companion object {
         private val logger = LoggerFactory.getLogger("[${HtmlFlowTemplates::class.simpleName}]")
 
         /**
-         * Thread-safe cache for view registries, keyed by scanned package name.
-         * This prevents redundant classpath scanning for the same packages.
+         * Thread-safe cache for preprocessed view registries, keyed by scanned package name.
+         * This prevents redundant classpath scanning for the same packages in caching mode.
          */
         private val cachedViewRegistries = ConcurrentHashMap<String, Map<Class<*>, ViewInfo>>()
 
         /**
-         * Thread-safe cache for resolved view lookups to optimize repeated access to derived types.
+         * Cache for hot reload view registries, keyed by scanned package name.
+         * This is cleared on each hot reload to ensure fresh view discovery.
+         */
+        private val hotViewRegistries = ConcurrentHashMap<String, Map<Class<*>, ViewInfo>>()
+
+        /**
+         * Thread-safe cache for preprocessed view resolution lookups to optimize repeated access to derived types.
          *
          * When a ViewModel class is resolved via inheritance chain, interfaces, or assignable types
          * (rather than direct registry lookup), the result is cached here to avoid re-traversing
@@ -117,6 +111,12 @@ class HtmlFlowTemplates : Templates {
          * - Resolution cache contains inferred mappings (e.g., DerivedVm -> BaseVm's view)
          */
         private val resolutionCache = ConcurrentHashMap<Class<*>, ViewInfo>()
+
+        /**
+         * Cache for hot reload view resolution lookups.
+         * This is cleared on each hot reload to ensure fresh view resolution.
+         */
+        private val hotResolutionCache = ConcurrentHashMap<Class<*>, ViewInfo>()
 
         /**
          * Represents metadata about a discovered HTML view during classpath scanning.
@@ -179,13 +179,14 @@ class HtmlFlowTemplates : Templates {
      * @throws ClassNotFoundException if referenced classes cannot be loaded
      * @throws IllegalAccessException if view fields/methods cannot be accessed
      */
-    private fun scanForHtmlViews(basePackage: String = "", engine: HtmlFlow.Engine): Map<Class<*>, ViewInfo> {
-        val cacheKey = "$basePackage:${engine.hashCode()}"
-        return cachedViewRegistries.computeIfAbsent(cacheKey) { _ ->
-            logger.info("Scanning package '$basePackage' for HTML views...")
-            val registry = performPackageScan(basePackage, engine)
+    private fun scanForHtmlViews(basePackage: String = "", hot: Boolean): Map<Class<*>, ViewInfo> {
+        val cacheKey = "$basePackage:${hot}"
+        val targetRegistry = if (hot) hotViewRegistries else cachedViewRegistries
+        return targetRegistry.computeIfAbsent(cacheKey) { _ ->
+            logger.info("Scanning package '$basePackage' for HTML views (hot=$hot)...")
+            val registry = performPackageScan(basePackage, hot)
             logger.info(
-                "Successfully scanned package '$basePackage' - found ${registry.size} HTML views",
+                "Successfully scanned package '$basePackage' - found ${registry.size} HTML views (hot=$hot)",
             )
             registry
         }
@@ -202,10 +203,9 @@ class HtmlFlowTemplates : Templates {
      * - The last classloader rethrows the exception to surface hard failures.
      *
      * @param basePackage Package to scan (dot notation). Empty string means full classpath (discouraged for perf).
-     * @param engine [HtmlFlow.Engine] used later to re-wrap raw views with configured behaviour.
      * @return Immutable map of discovered view model class -> ViewInfo.
      */
-    private fun performPackageScan(basePackage: String, engine: HtmlFlow.Engine): Map<Class<*>, ViewInfo> {
+    private fun performPackageScan(basePackage: String, hot: Boolean): Map<Class<*>, ViewInfo> {
         val viewRegistry = mutableMapOf<Class<*>, ViewInfo>()
         val classLoaders = getAvailableClassLoaders()
         val packagePath = basePackage.replace('.', '/')
@@ -218,7 +218,7 @@ class HtmlFlowTemplates : Templates {
                 while (resources.hasMoreElements()) {
                     resourcesFound = true
                     val resource = resources.nextElement()
-                    processClasspathResource(resource, basePackage, viewRegistry, engine)
+                    processClasspathResource(resource, basePackage, viewRegistry, hot)
                 }
                 if (resourcesFound) break
             } catch (e: Exception) {
@@ -265,11 +265,11 @@ class HtmlFlowTemplates : Templates {
         resource: URL,
         basePackage: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         when (resource.protocol) {
-            "file" -> processFileSystemResource(resource, basePackage, viewRegistry, engine)
-            "jar" -> processJarResource(resource, basePackage, viewRegistry, engine)
+            "file" -> processFileSystemResource(resource, basePackage, viewRegistry, hot)
+            "jar" -> processJarResource(resource, basePackage, viewRegistry, hot)
             else -> logger.debug("Unsupported protocol: ${resource.protocol}")
         }
     }
@@ -282,11 +282,11 @@ class HtmlFlowTemplates : Templates {
         resource: URL,
         basePackage: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         val packageDirectory = File(resource.toURI())
         if (packageDirectory.exists() && packageDirectory.isDirectory) {
-            scanDirectory(packageDirectory, basePackage, viewRegistry, engine)
+            scanDirectory(packageDirectory, basePackage, viewRegistry, hot)
         }
     }
 
@@ -298,18 +298,18 @@ class HtmlFlowTemplates : Templates {
         resource: URL,
         basePackage: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         val jarPath = resource.path.substringBefore("!")
         val jarFile = JarFile(URI(jarPath).path)
         val packagePath = basePackage.replace('.', '/')
 
         jarFile.entries().asSequence().filter { entry -> isRelevantClassEntry(entry, packagePath) }.forEach { entry ->
-                val className = convertEntryNameToClassName(entry.name)
-                if (!shouldExcludeClass(className)) {
-                    loadAndScanClass(className, viewRegistry, engine)
-                }
+            val className = convertEntryNameToClassName(entry.name)
+            if (!shouldExcludeClass(className)) {
+                loadAndScanClass(className, viewRegistry, hot)
             }
+        }
     }
 
     /**
@@ -321,7 +321,7 @@ class HtmlFlowTemplates : Templates {
         directory: File,
         packageName: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         if (shouldExcludePackage(packageName)) {
             logger.debug("Skipping excluded package directory: $packageName")
@@ -334,12 +334,12 @@ class HtmlFlowTemplates : Templates {
             when {
                 file.isDirectory -> {
                     val subPackage = buildSubPackageName(packageName, file.name)
-                    scanDirectory(file, subPackage, viewRegistry, engine)
+                    scanDirectory(file, subPackage, viewRegistry, hot)
                 }
 
                 isRelevantClassFile(file) -> {
                     val className = buildClassName(packageName, file.nameWithoutExtension)
-                    loadAndScanClass(className, viewRegistry, engine)
+                    loadAndScanClass(className, viewRegistry, hot)
                 }
             }
         }
@@ -356,7 +356,7 @@ class HtmlFlowTemplates : Templates {
     private fun loadAndScanClass(
         className: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean
     ) {
         if (shouldExcludeClass(className)) {
             logger.debug("Skipping excluded class: $className")
@@ -365,10 +365,10 @@ class HtmlFlowTemplates : Templates {
 
         try {
             val clazz = Class.forName(className)
-            scanClassForHtmlViews(clazz, viewRegistry, engine)
+            scanClassForHtmlViews(clazz, viewRegistry, hot)
 
             if (!className.endsWith("Kt")) {
-                tryLoadAndScanKotlinFileClass(className, viewRegistry, engine)
+                tryLoadAndScanKotlinFileClass(className, viewRegistry, hot)
             }
         } catch (_: ClassNotFoundException) {
             logger.debug("Class not found: $className")
@@ -387,12 +387,12 @@ class HtmlFlowTemplates : Templates {
     private fun tryLoadAndScanKotlinFileClass(
         originalClassName: String,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean
     ) {
         try {
             val kotlinFileClassName = "${originalClassName}Kt"
             val kotlinFileClass = Class.forName(kotlinFileClassName)
-            scanClassForHtmlViews(kotlinFileClass, viewRegistry, engine)
+            scanClassForHtmlViews(kotlinFileClass, viewRegistry, hot)
         } catch (_: ClassNotFoundException) {
         } catch (e: Exception) {
             logger.debug("Failed to scan Kotlin file class for: $originalClassName", e)
@@ -402,15 +402,15 @@ class HtmlFlowTemplates : Templates {
     private fun scanClassForHtmlViews(
         clazz: Class<*>,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean
     ) {
         if (shouldSkipClass(clazz)) return
         try {
-            val objectInstance = createInstanceForScanning(clazz, engine)
+            val objectInstance = createInstanceForScanning(clazz)
             if (objectInstance == null && !clazz.constructors.isEmpty()) {
                 return
             }
-            scanClassMembers(clazz, objectInstance, viewRegistry, engine)
+            scanClassMembers(clazz, objectInstance, viewRegistry, hot)
         } catch (e: Exception) {
             logger.debug("Failed to scan class: ${clazz.name}", e)
             throw e
@@ -429,13 +429,13 @@ class HtmlFlowTemplates : Templates {
      * @return Class instance for scanning, or null if no suitable instantiation method found
      *         or if the class represents Kotlin top-level declarations
      */
-    private fun createInstanceForScanning(clazz: Class<*>, engine: HtmlFlow.Engine? = null): Any? {
+    private fun createInstanceForScanning(clazz: Class<*>, factory: HtmlFlow.ViewFactory? = null): Any? {
         // For Kotlin file classes (top-level properties), we don't need an instance
         if (clazz.name.endsWith("Kt")) {
             return null
         }
 
-        return tryObjectInstance(clazz) ?: tryDefaultConstructor(clazz) ?: tryViewEngineConstructor(clazz, engine)
+        return tryObjectInstance(clazz) ?: tryDefaultConstructor(clazz) ?: tryViewEngineConstructor(clazz, factory)
         ?: tryCompanionObject(clazz) ?: trySingletonInstance(clazz)
     }
 
@@ -472,13 +472,13 @@ class HtmlFlowTemplates : Templates {
         }
     }
 
-    private fun tryViewEngineConstructor(clazz: Class<*>, engine: HtmlFlow.Engine?): Any? {
-        if (engine == null) return null
+    private fun tryViewEngineConstructor(clazz: Class<*>, factory: HtmlFlow.ViewFactory?): Any? {
+        if (factory == null) return null
 
         return try {
-            val constructor = clazz.getDeclaredConstructor(HtmlFlow.Engine::class.java)
+            val constructor = clazz.getDeclaredConstructor(HtmlFlow.ViewFactory::class.java)
             constructor.isAccessible = true
-            constructor.newInstance(engine)
+            constructor.newInstance(factory)
         } catch (_: NoSuchMethodException) {
             null
         } catch (e: Exception) {
@@ -495,10 +495,10 @@ class HtmlFlowTemplates : Templates {
         clazz: Class<*>,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean
     ) {
-        scanMethodsForViews(clazz, objectInstance, viewRegistry, engine)
-        scanFieldsForViews(clazz, objectInstance, viewRegistry, engine)
+        scanMethodsForViews(clazz, objectInstance, viewRegistry, hot)
+        scanFieldsForViews(clazz, objectInstance, viewRegistry, hot)
     }
 
     /**
@@ -509,10 +509,10 @@ class HtmlFlowTemplates : Templates {
         clazz: Class<*>,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         clazz.declaredMethods.filter { method -> isRelevantViewMethod(method) }
-            .forEach { method -> processViewMethod(method, objectInstance, viewRegistry, engine) }
+            .forEach { method -> processViewMethod(method, objectInstance, viewRegistry, hot) }
     }
 
     /**
@@ -523,10 +523,10 @@ class HtmlFlowTemplates : Templates {
         clazz: Class<*>,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         clazz.declaredFields.filter { field -> isRelevantViewField(field) }
-            .forEach { field -> processViewField(field, objectInstance, viewRegistry, engine) }
+            .forEach { field -> processViewField(field, objectInstance, viewRegistry, hot) }
     }
 
     /**
@@ -576,21 +576,18 @@ class HtmlFlowTemplates : Templates {
         method: Method,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         method.isAccessible = true
-        val originalView = if (method.parameterCount == 1 && method.parameterTypes[0] == HtmlFlow.Engine::class.java) {
-            method.invoke(objectInstance, engine)
-        } else {
-            method.invoke(objectInstance)
-        } ?: return
+        val originalView =
+            if (method.parameterCount == 1 && method.parameterTypes[0] == HtmlFlow.ViewFactory::class.java) {
+                method.invoke(objectInstance)
+            } else {
+                method.invoke(objectInstance)
+            } ?: return
         val location = "${method.declaringClass.name}.${method.name}()"
 
-        val viewToRegister = if (originalView is HtmlView<*>) {
-            createPreConfiguredView(originalView, engine)
-        } else {
-            originalView
-        }
+        val viewToRegister = (originalView as? HtmlView<*>)?.setPreEncoding(!hot) ?: return
 
         registerView(viewToRegister, method.genericReturnType, viewRegistry, location)
     }
@@ -603,41 +600,17 @@ class HtmlFlowTemplates : Templates {
         field: Field,
         objectInstance: Any?,
         viewRegistry: MutableMap<Class<*>, ViewInfo>,
-        engine: HtmlFlow.Engine,
+        hot: Boolean,
     ) {
         try {
             field.isAccessible = true
             val originalView = field.get(objectInstance) ?: return
             val location = "${field.declaringClass.name}.${field.name}"
-
-            val viewToRegister = if (originalView is HtmlView<*>) {
-                createPreConfiguredView(originalView, engine)
-            } else {
-                originalView
-            }
+            val viewToRegister = (originalView as? HtmlView<*>)?.setPreEncoding(!hot) ?: return
 
             registerView(viewToRegister, field.genericType, viewRegistry, location)
         } catch (e: Exception) {
             logger.debug("Failed to process view field: ${field.name}", e)
-        }
-    }
-
-    /**
-     * Produces a new HtmlView instance that shares the original template but is constructed via
-     * the supplied Engine so that engine-level settings (indentation, caching, thread-safety) apply.
-     * Falls back to the original view on any reflection issue.
-     */
-    private fun createPreConfiguredView(originalView: HtmlView<*>, engine: HtmlFlow.Engine): HtmlView<*> {
-        return try {
-            // Extract the template from the original view
-            val templateField = originalView::class.java.getDeclaredField("template").apply { isAccessible = true }
-            val template = templateField.get(originalView) as HtmlTemplate
-
-            // Create a new view with the Engine configuration
-            engine.view<Any>(template)
-        } catch (e: Exception) {
-            logger.debug("Failed to create pre-configured view, using original", e)
-            originalView
         }
     }
 
@@ -680,7 +653,7 @@ class HtmlFlowTemplates : Templates {
      * Predicate identifying candidate methods (zero args or single Engine arg, non-synthetic, HtmlView return type).
      */
     private fun isRelevantViewMethod(method: Method): Boolean {
-        return !method.isSynthetic && (method.parameterCount == 0 || (method.parameterCount == 1 && method.parameterTypes[0] == HtmlFlow.Engine::class.java)) && isHtmlViewMethod(
+        return !method.isSynthetic && (method.parameterCount == 0 || (method.parameterCount == 1 && method.parameterTypes[0] == HtmlFlow.ViewFactory::class.java)) && isHtmlViewMethod(
             method
         )
     }
@@ -759,11 +732,13 @@ class HtmlFlowTemplates : Templates {
      * Creates a template renderer from the view registry.
      */
     private fun createTemplateRenderer(
-        viewRegistry: Map<Class<*>, ViewInfo>
+        viewRegistry: Map<Class<*>, ViewInfo>,
+        hot: Boolean
     ): TemplateRenderer {
+        val targetResolutionCache = if (hot) hotResolutionCache else resolutionCache
         return object : TemplateRenderer {
             override fun invoke(viewModel: ViewModel): String {
-                val viewInfo = findCompatibleView(viewModel, viewRegistry)
+                val viewInfo = findCompatibleView(viewModel, viewRegistry, targetResolutionCache)
                 return renderViewWithModel(viewInfo.view, viewModel, viewInfo.location)
             }
         }
@@ -804,16 +779,12 @@ class HtmlFlowTemplates : Templates {
      * data class PublicProfile(override val name: String) : ProfileLike
      * val profileView: HtmlView<ProfileLike> = HtmlFlow.view { ... }
      * // registry key is ProfileLike; rendering PublicProfile matches interface.
-     *
-     * // 5. Assignable fallback (when no inheritance/interface match exists) (QUESTION: does it make sense to support this?)
-     * val anyView: HtmlView<Any> = HtmlFlow.view { ... }  // View that accepts any type
-     * data class UnrelatedVm(val data: String) : ViewModel  // No inheritance chain to Any
-     * // Registry has Any; UnrelatedVm has no superclass/interface matches, but Any.isAssignableFrom(UnrelatedVm) = true
      * ```
      */
     private fun findCompatibleView(
         viewModel: ViewModel,
         viewRegistry: Map<Class<*>, ViewInfo>,
+        targetResolutionCache: ConcurrentHashMap<Class<*>, ViewInfo>
     ): ViewInfo {
         val viewModelClass = viewModel::class.java
 
@@ -821,13 +792,13 @@ class HtmlFlowTemplates : Templates {
         viewRegistry[viewModelClass]?.let { return it }
 
         // Check resolution cache for previously resolved indirect matches
-        resolutionCache[viewModelClass]?.let { return it }
+        targetResolutionCache[viewModelClass]?.let { return it }
 
         // Perform full resolution chain and cache the result
         val resolved = resolveViewThroughHierarchy(viewModelClass, viewRegistry)
 
         // Cache the resolved view for future lookups (only if found)
-        resolved?.let { resolutionCache[viewModelClass] = it }
+        resolved?.let { targetResolutionCache[viewModelClass] = it }
 
         return resolved ?: throw IllegalArgumentException(
             "No compatible HtmlView found for ViewModel type: ${viewModelClass.simpleName}. " + "Available views: ${viewRegistry.keys.joinToString { it.simpleName }}",
@@ -847,9 +818,6 @@ class HtmlFlowTemplates : Templates {
 
         // Check interfaces
         findViewInInterfaces(viewModelClass, viewRegistry)?.let { return it }
-
-        // Check assignable types
-        findAssignableView(viewModelClass, viewRegistry)?.let { return it }
 
         return null
     }
@@ -874,13 +842,6 @@ class HtmlFlowTemplates : Templates {
             viewRegistry[interfaceClass]?.let { return it }
         }
         return null
-    }
-
-    private fun findAssignableView(
-        viewModelClass: Class<*>,
-        viewRegistry: Map<Class<*>, ViewInfo>,
-    ): ViewInfo? {
-        return viewRegistry.entries.find { (type, _) -> type.isAssignableFrom(viewModelClass) }?.value
     }
 
     /**
