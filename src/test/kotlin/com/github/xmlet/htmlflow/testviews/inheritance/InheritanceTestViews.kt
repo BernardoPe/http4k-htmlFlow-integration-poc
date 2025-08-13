@@ -11,9 +11,7 @@ import org.xmlet.htmlapifaster.div
 import org.xmlet.htmlapifaster.h2
 import org.xmlet.htmlapifaster.p
 
-/**
- * Test views for inheritance and interface compatibility testing
- */
+/** Test views for inheritance and interface compatibility testing */
 class InheritanceTestViews {
     val baseView: HtmlView<BaseTestViewModel> =
         HtmlFlow.view {
@@ -22,9 +20,7 @@ class InheritanceTestViews {
                     div {
                         attrClass("base-view")
                         h2 { text("Base View") }
-                        dyn { model: BaseTestViewModel ->
-                            p { text("Base: ${model.baseContent}") }
-                        }
+                        dyn { model: BaseTestViewModel -> p { text("Base: ${model.baseContent}") } }
                     }
                 }
             }

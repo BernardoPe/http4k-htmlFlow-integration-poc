@@ -2,10 +2,7 @@ package com.github.xmlet.htmlflow
 
 import org.http4k.template.ViewModel
 
-/**
- * Test view models for HtmlFlowTemplates testing
- */
-
+/** Test view models for HtmlFlowTemplates testing */
 data class SimpleTestViewModel(val content: String) : ViewModel
 
 data class AsyncTestViewModel(val content: String) : ViewModel

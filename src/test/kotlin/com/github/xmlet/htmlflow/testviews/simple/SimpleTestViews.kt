@@ -18,9 +18,7 @@ import org.xmlet.htmlapifaster.h4
 import org.xmlet.htmlapifaster.p
 import org.xmlet.htmlapifaster.span
 
-/**
- * Simple test views for basic functionality testing
- */
+/** Simple test views for basic functionality testing */
 object SimpleTestViews {
     val simpleHtmlView: HtmlView<SimpleTestViewModel> =
         HtmlFlow.view {
@@ -30,9 +28,7 @@ object SimpleTestViews {
                         attrClass("simple")
                         h1 { text("Simple View") }
                         dyn { model: SimpleTestViewModel ->
-                            p {
-                                text("Content: ${model.content}")
-                            }
+                            p { text("Content: ${model.content}") }
                         }
                     }
                 }
@@ -47,9 +43,7 @@ object SimpleTestViews {
                         attrClass("async")
                         h3 { text("Async View") }
                         dyn { model: AsyncTestViewModel ->
-                            p {
-                                text("Async content: ${model.content}")
-                            }
+                            p { text("Async content: ${model.content}") }
                         }
                     }
                 }
@@ -64,9 +58,7 @@ object SimpleTestViews {
                         attrClass("method-view")
                         h2 { text("Method View") }
                         dyn { model: SimpleTestViewModel ->
-                            span {
-                                text("Method content: ${model.content}")
-                            }
+                            span { text("Method content: ${model.content}") }
                         }
                     }
                 }
@@ -82,9 +74,7 @@ object SimpleTestViews {
                         attrClass("async-method")
                         h4 { text("Async Method View") }
                         dyn { model: AsyncTestViewModel ->
-                            p {
-                                text("Async method content: ${model.content}")
-                            }
+                            p { text("Async method content: ${model.content}") }
                         }
                     }
                 }

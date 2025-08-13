@@ -6,7 +6,15 @@ import htmlflow.HtmlFlow
 import htmlflow.HtmlView
 import htmlflow.dyn
 import htmlflow.html
+import org.http4k.template.HtmlFlowTemplates
+import java.lang.reflect.Field
+import java.lang.reflect.Method
+import kotlin.jvm.java
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import org.http4k.template.ViewModel
+import org.http4k.template.ViewNotFound
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -17,16 +25,8 @@ import org.junit.jupiter.api.assertThrows
 import org.xmlet.htmlapifaster.body
 import org.xmlet.htmlapifaster.div
 import org.xmlet.htmlapifaster.p
-import java.lang.reflect.Field
-import java.lang.reflect.Method
-import kotlin.jvm.java
-import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 
-/**
- * Comprehensive test suite for HtmlFlowTemplates class
- */
+/** Comprehensive test suite for HtmlFlowTemplates class */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class HtmlFlowTemplatesTest {
     private lateinit var htmlFlowTemplates: HtmlFlowTemplates
@@ -67,19 +67,14 @@ class HtmlFlowTemplatesTest {
         }
 
         @Test
-        fun `should handle empty package gracefully`() {
+        fun `should handle empty package`() {
             val renderer =
                 htmlFlowTemplates.CachingClasspath(
                     "com.github.xmlet.htmlflow.testviews.empty",
                 )
 
             val model = SimpleTestViewModel("test")
-            val exception =
-                assertThrows<IllegalArgumentException> {
-                    renderer(model)
-                }
-
-            assertTrue(exception.message!!.contains("No compatible HtmlView found"))
+            assertThrows<ViewNotFound> { renderer(model) }
         }
 
         @Test
@@ -170,12 +165,7 @@ class HtmlFlowTemplatesTest {
 
             val unknownModel = object : ViewModel {}
 
-            val exception =
-                assertThrows<IllegalArgumentException> {
-                    renderer(unknownModel)
-                }
-
-            assertTrue(exception.message!!.contains("No compatible HtmlView found"))
+            assertThrows<ViewNotFound> { renderer(unknownModel) }
         }
     }
 
@@ -337,18 +327,12 @@ class HtmlFlowTemplatesTest {
 
         @Test
         fun `should handle type mismatch in extension function`() {
-            val view: HtmlView<SimpleTestViewModel> =
-                HtmlFlow.view {
-                    it.html { body { } }
-                }
+            val view: HtmlView<SimpleTestViewModel> = HtmlFlow.view { it.html { body {} } }
 
             val renderer = view.renderer()
             val wrongModel = AsyncTestViewModel("wrong type")
 
-            val exception =
-                assertThrows<IllegalArgumentException> {
-                    renderer(wrongModel)
-                }
+            val exception = assertThrows<IllegalArgumentException> { renderer(wrongModel) }
 
             assertTrue(exception.message!!.contains("ViewModel type mismatch"))
         }
@@ -363,8 +347,8 @@ class HtmlFlowTemplatesTest {
                     htmlFlowTemplates.Caching("some/template/dir")
                 }
 
-            assertTrue(exception.message!!.contains("Template directory caching is not supported"))
-            assertTrue(exception.message!!.contains("Use CachingClasspath() instead"))
+            assertTrue(exception.message!!.contains("Directory scanning is not supported"))
+            assertTrue(exception.message!!.contains("Use CachingClasspath"))
         }
 
         @Test
@@ -377,18 +361,18 @@ class HtmlFlowTemplatesTest {
         }
     }
 
-    /**
-     * Helper method to call private methods using reflection
-     */
+    /** Helper method to call private methods using reflection */
     private fun callPrivateMethod(
         methodName: String,
         vararg args: Any?,
     ): Any? {
         val method =
-            htmlFlowTemplates::class.java.getDeclaredMethod(
-                methodName,
-                *args.map { it?.javaClass ?: Object::class.java }.toTypedArray(),
-            )
+            htmlFlowTemplates::class
+                .java
+                .getDeclaredMethod(
+                    methodName,
+                    *args.map { it?.javaClass ?: Object::class.java }.toTypedArray(),
+                )
         method.isAccessible = true
         return method.invoke(htmlFlowTemplates, *args)
     }
