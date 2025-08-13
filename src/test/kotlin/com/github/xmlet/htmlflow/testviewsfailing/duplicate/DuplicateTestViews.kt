@@ -10,9 +10,7 @@ import org.xmlet.htmlapifaster.div
 import org.xmlet.htmlapifaster.h2
 import org.xmlet.htmlapifaster.p
 
-/**
- * Duplicate test views for testing duplicate detection
- */
+/** Duplicate test views for testing duplicate detection */
 object FirstDuplicateViews {
     val duplicateView: HtmlView<SimpleTestViewModel> =
         HtmlFlow.view {
@@ -21,9 +19,7 @@ object FirstDuplicateViews {
                     div {
                         attrClass("first-duplicate")
                         h2 { text("First Duplicate") }
-                        dyn { model: SimpleTestViewModel ->
-                            p { text("First: ${model.content}") }
-                        }
+                        dyn { model: SimpleTestViewModel -> p { text("First: ${model.content}") } }
                     }
                 }
             }
@@ -38,9 +34,7 @@ object SecondDuplicateViews {
                     div {
                         attrClass("second-duplicate")
                         h2 { text("Second Duplicate") }
-                        dyn { model: SimpleTestViewModel ->
-                            p { text("Second: ${model.content}") }
-                        }
+                        dyn { model: SimpleTestViewModel -> p { text("Second: ${model.content}") } }
                     }
                 }
             }

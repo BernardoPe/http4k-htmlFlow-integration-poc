@@ -11,64 +11,60 @@ import org.xmlet.htmlapifaster.h2
 import org.xmlet.htmlapifaster.h3
 import org.xmlet.htmlapifaster.p
 
-/**
- * Test views that correspond to the KDoc examples in HtmlFlowTemplates
- */
+/** Test views that correspond to the KDoc examples in HtmlFlowTemplates */
 object KDocExampleViews {
-    
-    val userView: HtmlView<UserVm> = HtmlFlow.view {
-        it.html {
-            body {
-                div {
-                    attrClass("user-view")
-                    h1 { text("User Profile") }
-                    dyn { model: UserVm ->
-                        p { text("Welcome, ${model.name}!") }
-                    }
-                }
-            }
-        }
-    }
 
-    val baseView: HtmlView<BaseVm> = HtmlFlow.view {
-        it.html {
-            body {
-                div {
-                    attrClass("base-view")
-                    h2 { text("Base View") }
-                    dyn { model: BaseVm ->
-                        p { text("Base content: ${model.baseContent}") }
+    val userView: HtmlView<UserVm> =
+        HtmlFlow.view {
+            it.html {
+                body {
+                    div {
+                        attrClass("user-view")
+                        h1 { text("User Profile") }
+                        dyn { model: UserVm -> p { text("Welcome, ${model.name}!") } }
                     }
                 }
             }
         }
-    }
 
-    val profileView: HtmlView<ProfileLike> = HtmlFlow.view {
-        it.html {
-            body {
-                div {
-                    attrClass("profile-view")
-                    h2 { text("Profile Interface View") }
-                    dyn { model: ProfileLike ->
-                        p { text("Profile name: ${model.name}") }
+    val baseView: HtmlView<BaseVm> =
+        HtmlFlow.view {
+            it.html {
+                body {
+                    div {
+                        attrClass("base-view")
+                        h2 { text("Base View") }
+                        dyn { model: BaseVm -> p { text("Base content: ${model.baseContent}") } }
                     }
                 }
             }
         }
-    }
 
-    val secondaryView: HtmlView<SecondaryInterface> = HtmlFlow.view {
-        it.html {
-            body {
-                div {
-                    attrClass("secondary-view")
-                    h3 { text("Secondary Interface View") }
-                    dyn { model: SecondaryInterface ->
-                        p { text("Secondary: ${model.secondary}") }
+    val profileView: HtmlView<ProfileLike> =
+        HtmlFlow.view {
+            it.html {
+                body {
+                    div {
+                        attrClass("profile-view")
+                        h2 { text("Profile Interface View") }
+                        dyn { model: ProfileLike -> p { text("Profile name: ${model.name}") } }
                     }
                 }
             }
         }
-    }
+
+    val secondaryView: HtmlView<SecondaryInterface> =
+        HtmlFlow.view {
+            it.html {
+                body {
+                    div {
+                        attrClass("secondary-view")
+                        h3 { text("Secondary Interface View") }
+                        dyn { model: SecondaryInterface ->
+                            p { text("Secondary: ${model.secondary}") }
+                        }
+                    }
+                }
+            }
+        }
 }

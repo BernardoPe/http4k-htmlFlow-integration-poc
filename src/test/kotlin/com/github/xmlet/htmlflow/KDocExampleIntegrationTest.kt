@@ -3,13 +3,12 @@ package com.github.xmlet.htmlflow
 import com.github.xmlet.htmlflow.testviews.kdoc.DerivedVm
 import com.github.xmlet.htmlflow.testviews.kdoc.PublicProfile
 import com.github.xmlet.htmlflow.testviews.kdoc.UserVm
+import org.http4k.template.HtmlFlowTemplates
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
-import org.junit.jupiter.api.Assertions.*
 
-/**
- * Simple integration tests that validate each KDoc example works as documented
- */
+/** Simple integration tests that validate each KDoc example works as documented */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class KDocExampleIntegrationTest {
 
@@ -37,14 +36,14 @@ class KDocExampleIntegrationTest {
     @Test
     fun `hot reload should clear caches and work correctly`() {
         val templates = HtmlFlowTemplates()
-        
+
         // First, use caching renderer to populate cache
         val cachingRenderer = templates.CachingClasspath("com.github.xmlet.htmlflow.testviews.kdoc")
         val cachingResult = cachingRenderer(DerivedVm("Caching Test", "Extra"))
         assertContainsExpectedContent(cachingResult, "Base View", "Caching Test")
 
         // Then use hot reload (should clear caches)
-        val hotReloadRenderer = templates.HotReload("com.github.xmlet.htmlflow.testviews.kdoc")
+        val hotReloadRenderer = templates.HotReloadClasspath("com.github.xmlet.htmlflow.testviews.kdoc")
         val hotReloadResult = hotReloadRenderer(DerivedVm("Hot Reload Test", "Extra"))
         assertContainsExpectedContent(hotReloadResult, "Base View", "Hot Reload Test")
     }
@@ -56,17 +55,21 @@ class KDocExampleIntegrationTest {
 
         // Test model that could potentially match multiple views
         // Should consistently use inheritance chain resolution
-        val models = listOf(
-            DerivedVm("Test 1", "Extra 1"),
-            DerivedVm("Test 2", "Extra 2"),
-            DerivedVm("Test 3", "Extra 3")
-        )
+        val models =
+            listOf(
+                DerivedVm("Test 1", "Extra 1"),
+                DerivedVm("Test 2", "Extra 2"),
+                DerivedVm("Test 3", "Extra 3")
+            )
 
         val results = models.map { renderer(it) }
-        
+
         // All should resolve to the same view type (BaseVm view)
         results.forEach { result ->
-            assertTrue(result.contains("Base View"), "All derived models should resolve to base view")
+            assertTrue(
+                result.contains("Base View"),
+                "All derived models should resolve to base view"
+            )
         }
     }
 

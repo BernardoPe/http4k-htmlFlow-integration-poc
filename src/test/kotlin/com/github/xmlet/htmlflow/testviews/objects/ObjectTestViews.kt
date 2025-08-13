@@ -20,16 +20,12 @@ import org.xmlet.htmlapifaster.p
 import org.xmlet.htmlapifaster.title
 import org.xmlet.htmlapifaster.ul
 
-/**
- * Object-based test views to test Kotlin object detection
- */
+/** Object-based test views to test Kotlin object detection */
 object ObjectTestViews {
     val complexView: HtmlView<ComplexTestViewModel> =
         HtmlFlow.view {
             it.html {
-                head {
-                    title { text("Complex View") }
-                }
+                head { title { text("Complex View") } }
                 body {
                     div {
                         attrClass("complex")
@@ -42,11 +38,7 @@ object ObjectTestViews {
                                     text("Status: Active")
                                 }
                             }
-                            ul {
-                                model.items.forEach { item ->
-                                    li { text(item) }
-                                }
-                            }
+                            ul { model.items.forEach { item -> li { text(item) } } }
                         }
                     }
                 }
@@ -54,9 +46,7 @@ object ObjectTestViews {
         }
 }
 
-/**
- * Regular class-based test views
- */
+/** Regular class-based test views */
 class ClassTestViews {
     val classView: HtmlView<SimpleTestViewModel3> =
         HtmlFlow.view {

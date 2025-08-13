@@ -12,11 +12,7 @@ repositories {
 
 dependencies {
     implementation(platform("org.http4k:http4k-bom:6.15.1.0"))
-    implementation("org.http4k:http4k-core")
     implementation("org.http4k:http4k-template-core:6.15.1.0")
-
-    implementation("org.slf4j:slf4j-api:2.0.13")
-    implementation("org.slf4j:slf4j-simple:2.0.13")
 
     implementation("com.github.xmlet:htmlflow:4.8-SNAPSHOT")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
